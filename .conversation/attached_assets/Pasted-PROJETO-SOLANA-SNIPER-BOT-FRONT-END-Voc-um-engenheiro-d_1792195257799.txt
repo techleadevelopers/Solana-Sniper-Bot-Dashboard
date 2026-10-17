@@ -1,0 +1,498 @@
+PROJETO: SOLANA SNIPER BOT — FRONT-END
+
+Você é um engenheiro de software sênior especializado em React,
+TypeScript, interfaces financeiras, dashboards de trading e
+aplicações em tempo real.
+
+Sua tarefa é desenvolver o FRONT-END completo de um sistema chamado
+Solana Sniper Bot, um painel de controle para um bot automatizado
+de negociação de tokens recém-criados no Pump.fun, na blockchain
+Solana.
+
+IMPORTANTE:
+Este projeto terá um back-end independente desenvolvido em Go.
+O front-end deverá ser preparado para integrar-se a esse back-end
+por meio de uma API HTTP e WebSocket.
+
+Não implemente a lógica de negociação no navegador.
+Não assine transações no front-end.
+Não armazene chaves privadas no navegador.
+Não simule resultados reais como se fossem dados da blockchain.
+
+==================================================
+1. TECNOLOGIAS
+==================================================
+
+Utilize:
+
+- React.
+- TypeScript.
+- Vite.
+- Tailwind CSS.
+- Lucide React para ícones.
+- React Router para navegação.
+- TanStack Query para gerenciamento das consultas à API.
+- Biblioteca de gráficos adequada para dashboards.
+- WebSocket para receber atualizações em tempo real.
+
+Utilize versões estáveis e compatíveis das dependências.
+
+O projeto deverá ser responsivo e funcionar em computadores,
+tablets e celulares.
+
+==================================================
+2. IDENTIDADE VISUAL
+==================================================
+
+Crie uma interface moderna inspirada em plataformas profissionais
+de trading de criptomoedas e dashboards de infraestrutura.
+
+Características visuais:
+
+- Tema escuro.
+- Fundo grafite ou preto.
+- Cards com bordas discretas.
+- Tipografia legível.
+- Verde para resultados positivos.
+- Vermelho para resultados negativos.
+- Amarelo para alertas.
+- Azul para informações técnicas.
+- Gráficos limpos.
+- Tabelas organizadas.
+- Boa hierarquia visual.
+- Navegação lateral.
+- Cabeçalho com estado do sistema.
+- Layout responsivo.
+
+Evite animações excessivas.
+
+Priorize legibilidade, desempenho e facilidade de operação.
+
+==================================================
+3. ESTRUTURA DA APLICAÇÃO
+==================================================
+
+Organize o projeto aproximadamente assim:
+
+src/
+  components/
+    layout/
+    dashboard/
+    tokens/
+    positions/
+    rpc/
+    settings/
+    logs/
+    common/
+
+  pages/
+    DashboardPage.tsx
+    TokenMonitorPage.tsx
+    PositionsPage.tsx
+    TradeHistoryPage.tsx
+    RpcManagerPage.tsx
+    StrategyPage.tsx
+    WalletPage.tsx
+    LogsPage.tsx
+
+  services/
+    api.ts
+    websocket.ts
+
+  hooks/
+  types/
+  utils/
+  App.tsx
+  main.tsx
+
+Ajuste a estrutura se necessário, mantendo os componentes
+organizados e reutilizáveis.
+
+==================================================
+4. DASHBOARD PRINCIPAL
+==================================================
+
+Criar uma página inicial com os seguintes indicadores:
+
+- Estado do bot.
+- Modo de operação.
+- Saldo disponível da carteira.
+- Saldo reservado para taxas.
+- Total de tokens detectados.
+- Total de tokens analisados.
+- Total de operações realizadas.
+- Posições abertas.
+- Lucro ou prejuízo realizado.
+- Resultado estimado das posições abertas.
+- Resultado líquido acumulado.
+- Custos totais.
+- Últimas operações.
+- Estado da conexão com o back-end.
+- Estado da conexão com o monitor de eventos.
+
+Criar gráficos para:
+
+- Evolução do resultado líquido.
+- Quantidade de operações por período.
+- Distribuição de resultados positivos e negativos.
+- Histórico de saldo, quando os dados estiverem disponíveis.
+
+Todos os valores reais deverão vir do back-end.
+
+Não inventar preços, saldos ou resultados.
+
+Quando o back-end ainda não estiver conectado, mostrar claramente
+o estado "Aguardando conexão com o back-end".
+
+Se forem usados dados de demonstração durante o desenvolvimento,
+identificá-los explicitamente como SIMULAÇÃO.
+
+==================================================
+5. CONTROLE DO BOT
+==================================================
+
+Adicionar controles para:
+
+- Iniciar o bot.
+- Pausar novas compras.
+- Retomar a estratégia.
+- Interromper novas operações.
+- Alternar entre modo de simulação e modo real.
+
+O modo real deverá apresentar uma confirmação explícita antes
+de solicitar a ativação.
+
+Exibir avisos de segurança quando o saldo da carteira estiver
+baixo ou a conexão com o back-end estiver indisponível.
+
+A interrupção deverá impedir novas compras.
+
+Não presumir que interromper o bot encerra automaticamente
+as posições existentes.
+
+O estado apresentado no painel deverá refletir a resposta real
+do back-end.
+
+Não mostrar o bot como ativo se a ativação falhar.
+
+==================================================
+6. MONITOR DE NOVOS TOKENS
+==================================================
+
+Criar uma página de monitoramento dos tokens detectados.
+
+A tabela deverá apresentar:
+
+- Horário da detecção.
+- Nome do token, quando disponível.
+- Símbolo.
+- Endereço mint.
+- Carteira criadora, quando disponível.
+- Estado da análise.
+- Liquidez ou dados da curva, quando disponíveis.
+- Quantidade de negociações, quando disponível.
+- Resultado da avaliação de risco.
+- Motivo da aprovação ou rejeição.
+- Estado da operação.
+
+Possíveis estados:
+
+- Detectado.
+- Em análise.
+- Aprovado.
+- Rejeitado.
+- Compra enviada.
+- Compra confirmada.
+- Falha na compra.
+- Posição aberta.
+- Venda enviada.
+- Venda confirmada.
+
+Não presumir que todos os dados estarão disponíveis em todos
+os eventos.
+
+Permitir filtrar por estado, horário e endereço.
+
+Permitir copiar o endereço mint.
+
+Adicionar paginação ou carregamento incremental.
+
+Atualizar os dados por WebSocket quando possível.
+
+==================================================
+7. POSIÇÕES ABERTAS
+==================================================
+
+Criar uma página para acompanhar posições.
+
+Exibir:
+
+- Token.
+- Endereço mint.
+- Quantidade adquirida.
+- Preço médio de entrada, quando calculável.
+- Valor gasto na compra.
+- Custos registrados.
+- Valor estimado da posição.
+- Resultado estimado.
+- Resultado realizado.
+- Tempo desde a entrada.
+- Estado da posição.
+- Estado da venda.
+
+Diferenciar visualmente:
+
+- Resultado estimado.
+- Resultado realizado.
+
+Não apresentar um valor estimado como lucro confirmado.
+
+Se houver um botão para solicitar venda manual, ele deverá enviar
+a solicitação ao back-end e aguardar o resultado.
+
+Não executar negociações diretamente no navegador.
+
+==================================================
+8. HISTÓRICO DE NEGOCIAÇÕES
+==================================================
+
+Criar uma tabela de histórico com:
+
+- Data e hora.
+- Token.
+- Endereço mint.
+- Tipo da operação.
+- Quantidade.
+- Valor da compra.
+- Valor da venda.
+- Taxas.
+- Slippage registrado.
+- Resultado bruto, quando calculável.
+- Resultado líquido.
+- Identificador da transação.
+- Estado da transação.
+
+Permitir filtros por data, token e resultado.
+
+Permitir copiar o identificador da transação.
+
+Adicionar um link para o explorador Solscan quando houver uma
+assinatura válida.
+
+Não inventar identificadores ou links de transações.
+
+==================================================
+9. GERENCIAMENTO DOS RPCs
+==================================================
+
+Criar uma página chamada RPC Manager.
+
+O sistema deverá apresentar cinco endpoints candidatos:
+
+1. https://api.mainnet.solana.com
+2. https://solana-rpc.publicnode.com
+3. https://rpc.ankr.com/solana
+4. https://solana.drpc.org
+5. https://api.mainnet-beta.solana.com
+
+Esses endpoints são candidatos e podem ter restrições de acesso.
+O back-end será responsável por validar sua disponibilidade.
+
+Não considerar automaticamente um endpoint como gratuito,
+ilimitado ou adequado para produção.
+
+Para cada endpoint, exibir:
+
+- Identificação.
+- URL, com proteção contra exposição de credenciais.
+- Estado.
+- Latência observada.
+- Taxa de sucesso.
+- Quantidade de falhas.
+- Último teste.
+- Erros de rate limit.
+- Capacidade de leitura.
+- Estado dos testes de envio.
+- Estado dos testes de confirmação.
+- Papel atual: principal, reserva ou desativado.
+
+Adicionar controles para:
+
+- Solicitar teste.
+- Selecionar RPC principal.
+- Selecionar RPC de reserva.
+- Desativar endpoint.
+- Atualizar métricas.
+
+O front-end não deverá executar testes de transação diretamente.
+
+Todas as operações deverão ser solicitadas ao back-end.
+
+==================================================
+10. CONFIGURAÇÃO DA ESTRATÉGIA
+==================================================
+
+Criar uma página para configurar:
+
+- Capital máximo por operação.
+- Meta de lucro.
+- Limite de perda.
+- Slippage máximo.
+- Taxa de prioridade.
+- Número máximo de posições simultâneas.
+- Tempo máximo de permanência.
+- Limite de perda diária.
+- Saldo mínimo de reserva para taxas.
+- Critérios de entrada.
+- Critérios de saída.
+- Modo de simulação.
+- Modo real.
+
+Adicionar validação de valores.
+
+Exigir confirmação para alterações importantes.
+
+Não presumir que os parâmetros configurados garantem lucro.
+
+Os valores serão enviados ao back-end, que deverá validá-los
+novamente antes de aceitar as alterações.
+
+==================================================
+11. CARTEIRA
+==================================================
+
+Criar uma página para exibir informações da carteira operacional.
+
+Mostrar:
+
+- Endereço público.
+- Saldo em SOL.
+- Saldo reservado para taxas.
+- Tokens mantidos.
+- Estado da sincronização.
+- Última atualização.
+
+Adicionar um botão para copiar o endereço público.
+
+A carteira deverá ser criada ou configurada pelo back-end.
+
+NUNCA solicitar a chave privada em um campo do navegador.
+
+NUNCA exibir a chave privada.
+
+NUNCA transmitir segredos ao front-end.
+
+O painel poderá mostrar o estado da configuração da carteira,
+mas não poderá assinar transações.
+
+==================================================
+12. LOGS E DIAGNÓSTICOS
+==================================================
+
+Criar uma página para apresentar:
+
+- Eventos de detecção.
+- Reconexões.
+- Erros de API.
+- Falhas de transação.
+- Confirmações.
+- Alterações de configuração.
+- Mudanças de RPC.
+- Alertas de risco.
+- Pausas automáticas.
+- Falhas de comunicação.
+
+Adicionar filtros por categoria, data e gravidade.
+
+Nunca apresentar chaves privadas, segredos ou credenciais.
+
+==================================================
+13. INTEGRAÇÃO COM O BACK-END
+==================================================
+
+Utilizar uma variável de ambiente:
+
+VITE_API_BASE_URL
+
+Criar um serviço centralizado para chamadas HTTP.
+
+Preparar a integração com os seguintes endpoints:
+
+GET  /api/health
+GET  /api/dashboard
+GET  /api/tokens
+GET  /api/positions
+GET  /api/trades
+GET  /api/rpcs
+GET  /api/config
+GET  /api/wallet
+
+POST /api/bot/start
+POST /api/bot/stop
+POST /api/bot/pause
+POST /api/bot/resume
+
+POST /api/config
+POST /api/rpcs/test
+POST /api/rpcs/select
+
+WS /ws/events
+
+Os contratos deverão ser documentados e compartilhados com
+o desenvolvimento do back-end.
+
+Se algum endpoint ainda não existir, apresentar o estado
+"Não implementado" ou "Aguardando conexão".
+
+Não simular respostas reais silenciosamente.
+
+Implementar tratamento de erros, estados de carregamento,
+timeouts e reconexão WebSocket.
+
+==================================================
+14. SEGURANÇA
+==================================================
+
+Implementar:
+
+- Autenticação de acesso ao painel.
+- Tratamento seguro de erros.
+- Proteção contra ações duplicadas.
+- Confirmação para operações críticas.
+- Validação dos dados recebidos.
+- Proteção dos segredos.
+- Estados visuais claros para operações pendentes.
+
+Não armazenar chaves privadas, frases-semente ou segredos
+em localStorage, sessionStorage ou código-fonte.
+
+==================================================
+15. ENTREGA
+==================================================
+
+Entregar:
+
+- Front-end completo.
+- Navegação funcional.
+- Componentes reutilizáveis.
+- Integração HTTP preparada.
+- Integração WebSocket preparada.
+- Interface responsiva.
+- Tratamento de erros.
+- Estados de carregamento.
+- Dados de demonstração claramente identificados.
+- README com instruções de execução.
+- Arquivo .env.example.
+- Documentação dos contratos de API.
+
+Antes de finalizar:
+
+1. Executar o projeto.
+2. Corrigir erros de compilação.
+3. Verificar a navegação.
+4. Verificar a responsividade.
+5. Verificar os estados sem conexão.
+6. Confirmar que nenhuma negociação é executada pelo navegador.
+
+Priorize um painel funcional, organizado e pronto para integração
+com o back-end em Go.

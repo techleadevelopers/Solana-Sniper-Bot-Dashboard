@@ -1,0 +1,637 @@
+PROJETO: SOLANA SNIPER BOT — BACK-END
+
+Você é um engenheiro de software sênior especializado em Go,
+blockchain Solana, APIs, sistemas concorrentes, carteiras
+criptográficas e execução automatizada de transações.
+
+Sua tarefa é desenvolver o BACK-END completo de um sistema
+chamado Solana Sniper Bot.
+
+O projeto terá um front-end React + TypeScript já criado
+no mesmo repositório.
+
+Sua responsabilidade é construir o motor do bot, integrar
+a PumpPortal Local Trading API, monitorar novos tokens,
+gerenciar uma carteira operacional, testar RPCs e fornecer
+uma API HTTP e WebSocket ao front-end.
+
+Não criar um segundo front-end.
+
+Não substituir o front-end existente sem necessidade.
+
+Não utilizar uma segunda API de negociação.
+
+==================================================
+1. TECNOLOGIAS
+==================================================
+
+Utilizar:
+
+- Go.
+- API HTTP.
+- WebSocket.
+- SQLite na primeira versão.
+- Migrações de banco de dados.
+- Logs estruturados.
+- Testes automatizados.
+- Docker quando necessário.
+
+Selecionar bibliotecas estáveis e mantidas.
+
+Documentar as dependências escolhidas.
+
+Antes de implementar a assinatura de transações, verificar
+a compatibilidade da biblioteca Solana escolhida com as
+transações serializadas retornadas pela PumpPortal Local API.
+
+Não implementar criptografia própria.
+
+==================================================
+2. ARQUITETURA
+==================================================
+
+Organizar o back-end aproximadamente assim:
+
+backend/
+  cmd/
+    server/
+      main.go
+
+  internal/
+    api/
+    config/
+    wallet/
+    tokenmonitor/
+    pumpportal/
+    rpcmanager/
+    strategy/
+    execution/
+    positions/
+    risk/
+    database/
+    logging/
+
+  migrations/
+  tests/
+  go.mod
+  Dockerfile
+
+O código deverá ser modular, testável e documentado.
+
+Separar a lógica de negociação da API HTTP.
+
+O processo de monitoramento deverá funcionar continuamente
+enquanto o serviço estiver ativo.
+
+Implementar encerramento gracioso e recuperação após falhas.
+
+==================================================
+3. PUMPPORTAL LOCAL TRADING API
+==================================================
+
+Utilizar exclusivamente a PumpPortal Local Trading API
+para preparar as transações de negociação.
+
+Documentação:
+https://pumpportal.fun/local-trading-api/trading-api/
+
+Endpoint documentado:
+https://pumpportal.fun/api/trade-local
+
+Não implementar a PumpPortal Lightning API.
+
+Não integrar outras APIs de execução de ordens.
+
+A API Local deverá preparar a transação serializada.
+
+O back-end deverá:
+
+1. Validar os parâmetros da solicitação.
+2. Solicitar a preparação da transação.
+3. Verificar a resposta.
+4. Desserializar a transação com uma biblioteca compatível.
+5. Validar os campos críticos.
+6. Assinar a transação com a carteira operacional.
+7. Enviar a transação pelo RPC selecionado.
+8. Registrar a assinatura.
+9. Acompanhar a confirmação.
+10. Atualizar a posição somente com base em informações verificadas.
+
+Não assumir que a resposta HTTP significa que a negociação
+foi executada.
+
+Não presumir que uma transação enviada foi confirmada.
+
+Tratar erros, timeouts, transações expiradas e falhas de RPC.
+
+Os parâmetros efetivamente aceitos pela API deverão ser
+conferidos na documentação atual antes da implementação.
+
+==================================================
+4. MONITORAMENTO DE NOVOS TOKENS
+==================================================
+
+Implementar um módulo tokenmonitor.
+
+Utilizar a assinatura WebSocket documentada para novos tokens,
+conforme os requisitos de acesso vigentes da PumpPortal.
+
+O módulo deverá:
+
+- Manter a conexão ativa.
+- Reconectar após desconexões.
+- Detectar mensagens inválidas.
+- Extrair os dados disponíveis.
+- Registrar o endereço mint.
+- Registrar a carteira criadora quando disponível.
+- Registrar o horário de recebimento.
+- Evitar processar o mesmo evento repetidamente.
+- Registrar falhas.
+- Medir a latência de processamento.
+
+Criar uma fila interna de eventos.
+
+O processamento de um evento não deverá bloquear
+o recebimento de novos eventos.
+
+Implementar controle de concorrência e limites de memória.
+
+Não presumir que o evento de detecção contém todos os dados
+necessários para comprar o token.
+
+==================================================
+5. RPC MANAGER
+==================================================
+
+Implementar um gerenciador de RPCs com cinco endpoints candidatos.
+
+Configurar inicialmente:
+
+RPC-1:
+https://api.mainnet.solana.com
+
+RPC-2:
+https://solana-rpc.publicnode.com
+
+RPC-3:
+https://rpc.ankr.com/solana
+
+RPC-4:
+https://solana.drpc.org
+
+RPC-5:
+https://api.mainnet-beta.solana.com
+
+Esses endpoints são candidatos.
+
+Verificar disponibilidade, documentação, restrições de acesso,
+limites de uso e métodos suportados antes de utilizá-los.
+
+Não afirmar que todos são gratuitos ou ilimitados.
+
+Não usar os cinco endpoints para enviar transações independentes
+da mesma compra.
+
+O gerenciador deverá:
+
+- Consultar a saúde dos endpoints.
+- Medir latência.
+- Registrar falhas.
+- Identificar erros HTTP 429 e 403.
+- Avaliar a disponibilidade.
+- Verificar a capacidade de leitura.
+- Verificar o suporte aos métodos necessários.
+- Registrar o resultado dos testes.
+- Permitir selecionar um endpoint principal.
+- Permitir configurar um endpoint de reserva.
+- Evitar trocas excessivas de endpoint.
+- Registrar mudanças de seleção.
+
+Implementar testes de leitura antes de qualquer teste de envio.
+
+Não enviar transações reais apenas para testar latência.
+
+O endpoint principal deverá ser selecionado com base nas métricas
+observadas, não em uma classificação inventada.
+
+==================================================
+6. ENVIO E CONFIRMAÇÃO DAS TRANSAÇÕES
+==================================================
+
+Implementar um módulo execution.
+
+O envio de uma transação deverá ser acompanhado por seu
+identificador e por seu estado.
+
+Estados possíveis:
+
+- prepared
+- signed
+- submitted
+- pending
+- confirmed
+- finalized
+- failed
+- expired
+- unknown
+
+A nomenclatura poderá ser adaptada à implementação, mas deverá
+distinguir claramente envio, confirmação e falha.
+
+Não considerar uma transação confirmada apenas porque o endpoint
+RPC respondeu à solicitação de envio.
+
+Antes de repetir uma operação, verificar o estado da transação
+anterior.
+
+Quando apropriado, reutilizar a mesma transação assinada
+em tentativas controladas de envio, sem criar compras duplicadas.
+
+Se o resultado for desconhecido, bloquear novas compras daquele
+token até reconciliar o estado.
+
+Implementar timeouts e tentativas limitadas.
+
+Não manter tentativas infinitas.
+
+==================================================
+7. CARTEIRA OPERACIONAL
+==================================================
+
+Implementar um módulo wallet.
+
+A carteira deverá ser exclusiva para as operações do bot.
+
+Responsabilidades:
+
+- Carregar a configuração segura da carteira.
+- Consultar o endereço público.
+- Consultar saldo em SOL.
+- Consultar tokens mantidos.
+- Assinar transações.
+- Verificar se o saldo cobre a operação e as taxas.
+- Reservar saldo para taxas.
+- Impedir operações acima do capital permitido.
+
+Não gerar uma carteira real silenciosamente durante a inicialização.
+
+Não imprimir chaves privadas nos logs.
+
+Não enviar a chave privada ao front-end.
+
+Não armazenar chaves privadas em texto claro no banco de dados.
+
+Não solicitar a frase-semente por uma interface web.
+
+Utilizar um mecanismo seguro de configuração dos segredos.
+
+A carteira principal do usuário não deverá ser necessária.
+
+==================================================
+8. ESTRATÉGIA DE ENTRADA
+==================================================
+
+Implementar um módulo strategy.
+
+Cada novo token deverá passar por validações antes de uma compra.
+
+Verificar, conforme os dados disponíveis:
+
+- Endereço mint válido.
+- Estado do mercado.
+- Disponibilidade da curva de negociação.
+- Compatibilidade com o mercado suportado.
+- Saldo operacional.
+- Limites de exposição.
+- Existência de posição anterior.
+- Condições de liquidez e saída.
+- Dados disponíveis da carteira criadora.
+- Critérios de risco configurados.
+
+A ausência de informações críticas deverá ser tratada
+como motivo para não comprar.
+
+Não presumir que um token é seguro apenas porque acabou
+de ser criado.
+
+Não implementar critérios fictícios que dependam de dados
+inexistentes.
+
+Documentar as limitações das informações recebidas.
+
+A estratégia deverá ser configurável e iniciar em modo
+de simulação.
+
+==================================================
+9. ESTRATÉGIA DE SAÍDA
+==================================================
+
+Implementar um módulo positions.
+
+Acompanhar posições abertas.
+
+Permitir configurar:
+
+- Meta de lucro.
+- Limite de perda.
+- Tempo máximo de permanência.
+- Condições de liquidez.
+- Slippage máximo.
+- Limite de exposição.
+- Limite de perda diária.
+
+A saída deverá ser baseada em dados disponíveis e verificáveis.
+
+Não presumir que uma ordem de venda será executada pelo preço
+exibido na interface.
+
+Antes da venda, verificar se a carteira possui os tokens
+necessários e se o mercado permite a saída.
+
+Registrar o resultado efetivo da transação.
+
+Não classificar uma operação como lucrativa com base
+apenas na valorização estimada.
+
+==================================================
+10. CONTABILIDADE DE NEGOCIAÇÕES
+==================================================
+
+Registrar cada operação no banco de dados.
+
+Campos mínimos:
+
+- ID da operação.
+- Endereço mint.
+- Tipo da operação.
+- Quantidade.
+- Valor solicitado.
+- Valor executado.
+- Taxas.
+- Slippage registrado.
+- Assinatura da transação.
+- Horário da detecção.
+- Horário do envio.
+- Horário da confirmação.
+- Estado.
+- Motivo da entrada.
+- Motivo da saída.
+- Resultado líquido, quando calculável.
+
+O resultado deverá considerar:
+
+Valor recebido na venda
+menos valor gasto na compra
+menos taxas e custos aplicáveis.
+
+Não misturar valores estimados com valores realizados.
+
+Se o resultado não puder ser calculado com segurança,
+registrá-lo como pendente de reconciliação.
+
+Implementar mecanismos para reconciliar o estado do banco
+com os dados reais da carteira e das transações.
+
+==================================================
+11. CONTROLES DE RISCO
+==================================================
+
+Implementar limites configuráveis para:
+
+- Capital máximo por operação.
+- Exposição máxima.
+- Número máximo de posições simultâneas.
+- Slippage máximo.
+- Taxa de prioridade máxima.
+- Limite de perda diária.
+- Saldo mínimo de reserva para taxas.
+- Tempo máximo de espera.
+- Quantidade máxima de tentativas.
+- Bloqueio de operações duplicadas.
+
+O bot deverá iniciar em modo de simulação.
+
+A ativação de operações reais deverá exigir uma configuração
+explícita e validação de segurança.
+
+Se a carteira estiver sem saldo suficiente, bloquear compras.
+
+Se o RPC estiver indisponível, bloquear novas compras.
+
+Se houver transações com estado desconhecido, aplicar
+reconciliação antes de continuar.
+
+Se o limite de perda diária for atingido, interromper
+novas compras.
+
+A interrupção do bot não deverá ser interpretada automaticamente
+como ordem de venda de todas as posições.
+
+Implementar uma função de parada de emergência.
+
+==================================================
+12. API HTTP PARA O FRONT-END
+==================================================
+
+Implementar os seguintes endpoints:
+
+GET /api/health
+GET /api/dashboard
+GET /api/tokens
+GET /api/positions
+GET /api/trades
+GET /api/rpcs
+GET /api/config
+GET /api/wallet
+
+POST /api/bot/start
+POST /api/bot/stop
+POST /api/bot/pause
+POST /api/bot/resume
+
+POST /api/config
+POST /api/rpcs/test
+POST /api/rpcs/select
+
+WS /ws/events
+
+Definir contratos JSON consistentes.
+
+Validar todas as solicitações.
+
+Implementar autenticação e autorização para as rotas
+administrativas.
+
+Não permitir que usuários não autenticados iniciem operações
+ou alterem configurações críticas.
+
+O endpoint de saúde deverá distinguir entre serviço ativo,
+monitor conectado e capacidade de negociação disponível.
+
+==================================================
+13. WEBSOCKET DO PAINEL
+==================================================
+
+Implementar eventos para:
+
+- Novo token detectado.
+- Token aprovado.
+- Token rejeitado.
+- Compra enviada.
+- Compra confirmada.
+- Compra com falha.
+- Posição atualizada.
+- Venda enviada.
+- Venda confirmada.
+- Mudança de RPC.
+- Alerta de risco.
+- Pausa do bot.
+- Erro operacional.
+
+Os eventos deverão possuir estrutura consistente.
+
+Implementar reconexão e tratamento de clientes desconectados.
+
+Não enviar dados secretos ao painel.
+
+==================================================
+14. BANCO DE DADOS
+==================================================
+
+Utilizar SQLite na primeira versão.
+
+Criar tabelas para:
+
+- Configurações.
+- Tokens detectados.
+- Avaliações de risco.
+- Posições.
+- Negociações.
+- Transações.
+- Histórico de RPCs.
+- Logs operacionais.
+
+Criar migrações versionadas.
+
+Utilizar transações de banco de dados quando necessário.
+
+Evitar estados inconsistentes após falhas.
+
+Não armazenar chaves privadas em tabelas.
+
+==================================================
+15. CONFIGURAÇÃO
+==================================================
+
+Criar um arquivo .env.example contendo apenas nomes
+de variáveis e valores de exemplo não secretos.
+
+Incluir configurações para:
+
+- Porta HTTP.
+- Caminho do banco.
+- URL da PumpPortal.
+- Endpoints RPC.
+- Endereço público da carteira.
+- Referência ao mecanismo seguro de carregamento da chave.
+- Modo de simulação.
+- Limites de operação.
+- Configuração de autenticação.
+
+Não incluir chaves reais.
+
+Não colocar credenciais em arquivos versionados.
+
+Validar as configurações na inicialização.
+
+Se uma configuração essencial estiver ausente, informar
+o problema e impedir a execução de operações reais.
+
+==================================================
+16. TESTES
+==================================================
+
+Implementar testes automatizados para:
+
+- Validação de configurações.
+- Processamento de eventos.
+- Reconexão do WebSocket.
+- Deduplicação de tokens.
+- Seleção de RPC.
+- Erros HTTP 429 e 403.
+- Preparação de transações.
+- Assinatura de transações.
+- Envio e confirmação.
+- Transações expiradas.
+- Operações duplicadas.
+- Cálculo do resultado líquido.
+- Limites de risco.
+- Saldo insuficiente.
+- Falhas de conexão.
+- Reconciliação do banco de dados.
+
+Utilizar mocks nos testes unitários.
+
+Não depender de compras reais para executar a suíte de testes.
+
+Criar testes de integração separados e claramente identificados.
+
+==================================================
+17. EXECUÇÃO CONTÍNUA
+==================================================
+
+O serviço deverá:
+
+- Iniciar com configuração validada.
+- Iniciar em modo de simulação.
+- Recuperar conexões quando possível.
+- Persistir eventos relevantes.
+- Encerrar de forma graciosa.
+- Tratar sinais de encerramento.
+- Recuperar o estado após reinicialização.
+- Verificar posições existentes antes de iniciar novas compras.
+
+Não presumir que o ambiente de desenvolvimento permanecerá
+ativo 24 horas sem configuração de implantação apropriada.
+
+Documentar os requisitos para execução contínua.
+
+==================================================
+18. ENTREGA
+==================================================
+
+Entregar:
+
+- Código Go completo.
+- Integração com a PumpPortal Local API.
+- Monitor de tokens.
+- RPC Manager.
+- Carteira operacional.
+- Módulos de estratégia e risco.
+- API HTTP.
+- WebSocket.
+- Banco de dados.
+- Testes automatizados.
+- Dockerfile.
+- Arquivo .env.example.
+- README.
+- Documentação dos endpoints.
+- Instruções para integração com o front-end.
+
+Antes de finalizar:
+
+1. Executar os testes.
+2. Corrigir erros de compilação.
+3. Validar os contratos JSON.
+4. Confirmar que o modo de simulação não envia transações.
+5. Confirmar que nenhuma chave privada chega ao front-end.
+6. Confirmar que compras duplicadas são bloqueadas.
+7. Confirmar que transações pendentes são verificadas.
+8. Confirmar que operações reais exigem ativação explícita.
+
+Não afirmar que o bot é lucrativo sem evidências.
+
+Não inventar resultados de operações.
+
+Priorizar segurança, confiabilidade, observabilidade e
+correção financeira.

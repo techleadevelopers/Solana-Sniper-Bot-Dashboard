@@ -359,13 +359,29 @@ export async function customFetch<T = unknown>(
   }
 
   const requestInfo = { method, url: resolveUrl(input) };
+  const callerSignal = init.signal ?? (isRequest(input) ? input.signal : undefined);
+  const controller = new AbortController();
+  const abortFromCaller = () => controller.abort();
+  if (callerSignal?.aborted) controller.abort();
+  else callerSignal?.addEventListener("abort", abortFromCaller, { once: true });
+  const timeout = setTimeout(() => controller.abort(), 15_000);
 
-  const response = await fetch(input, { ...init, method, headers });
+  try {
+    const response = await fetch(input, {
+      ...init,
+      method,
+      headers,
+      signal: controller.signal,
+    });
 
-  if (!response.ok) {
-    const errorData = await parseErrorBody(response, method);
-    throw new ApiError(response, errorData, requestInfo);
+    if (!response.ok) {
+      const errorData = await parseErrorBody(response, method);
+      throw new ApiError(response, errorData, requestInfo);
+    }
+
+    return (await parseSuccessBody(response, responseType, requestInfo)) as T;
+  } finally {
+    clearTimeout(timeout);
+    callerSignal?.removeEventListener("abort", abortFromCaller);
   }
-
-  return (await parseSuccessBody(response, responseType, requestInfo)) as T;
 }
