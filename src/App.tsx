@@ -1,3 +1,6 @@
+// TODO(auth): Clerk routes below are intentionally unmounted because the Go API
+// validates the master-password HMAC bearer token, not Clerk tokens. Revisit
+// only as part of a coordinated API authentication migration.
 import { createContext, useContext, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { ClerkProvider, Show, SignIn, SignUp, useAuth, useClerk } from '@clerk/react';
 import { publishableKeyFromHost } from '@clerk/react/internal';
@@ -22,19 +25,21 @@ import {
   YAxis,
 } from 'recharts';
 import {
-  getGetConfigQueryKey, getGetDashboardQueryKey, getGetHealthQueryKey, getGetLogsQueryKey,
+  getGetDashboardQueryKey, getGetHealthQueryKey, getGetLogsQueryKey,
   getGetPositionsQueryKey, getGetRpcsQueryKey, getGetTokensQueryKey, getGetTradesQueryKey,
   getGetWalletQueryKey, useGetConfig, useGetDashboard, useGetHealth, useGetLogs,
   useGetPositions, useGetRpcs, useGetTokens, useGetTrades, useGetWallet,
-  usePauseBot, useRequestPositionSell, useResumeBot, useSaveConfig, useSelectRpc,
+  usePauseBot, useRequestPositionSell, useResumeBot, useSelectRpc,
   useStartBot, useStopBot, useTestRpc, setAuthTokenGetter,
   type GetLogsParams, type GetPositionsParams, type GetTokensParams, type GetTradesParams,
-  type RpcEndpoint, type StrategyConfigInput,
+  type RpcEndpoint,
 } from '@/api-client';
 import { Link, Redirect, Route, Router as WouterRouter, Switch, useLocation } from 'wouter';
 import { apiBaseUrl, apiConnectionLabel, hasConfiguredApiBase } from '@/services/api';
 import { createEventSocket, type BotEvent, type EventState } from '@/services/websocket';
+import { formatSol } from '@/lib/sol-format';
 import NotFound from '@/pages/not-found';
+import PerformanceReportPage from '@/pages/performance-report';
 import './index.css';
 
 const queryClient = new QueryClient({ defaultOptions: { queries: { retry: 1, staleTime: 5000, refetchOnWindowFocus: true } } });
@@ -52,9 +57,12 @@ const AuthContext = createContext<AuthState>({ token: null, signOut: () => undef
 const authStorageKey = 'solana-sniper-admin-session';
 const apiBase = apiBaseUrl;
 function useMasterAuth() { return useContext(AuthContext); }
+const EventMonitorContext = createContext<{ state: EventState; latest: BotEvent | null }>({ state: 'connecting', latest: null });
+const LIVE_DATA_REFRESH_MS = 5000;
 
 const navItems = [
   { href: '/user-portal', label: 'Visão geral', icon: LayoutDashboard },
+  { href: '/user-portal/reports', label: 'Relatório de desempenho', icon: BarChart3 },
   { href: '/user-portal/tokens', label: 'Tokens detetados', icon: Search },
   { href: '/user-portal/positions', label: 'Posições', icon: Layers3 },
   { href: '/user-portal/trades', label: 'Operações', icon: BarChart3 },
@@ -64,12 +72,13 @@ const navItems = [
   { href: '/user-portal/logs', label: 'Registos', icon: FileText },
 ];
 const navShort = navItems.slice(0, 5);
-const locale = 'pt-PT';
+const locale = 'pt-BR';
 const fmt = (value: number | null | undefined, digits = 3) => value == null || !Number.isFinite(value) ? 'Indisponível' : value.toLocaleString(locale, { maximumFractionDigits: digits, minimumFractionDigits: 0 });
+const fmtSol = formatSol;
 const fmtDate = (date?: string | null) => date ? new Intl.DateTimeFormat(locale, { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(date)) : 'Indisponível';
 const shortKey = (value?: string | null) => value ? `${value.slice(0, 5)}…${value.slice(-5)}` : 'Indisponível';
 const titleMap: Record<string, string> = {
-  '/user-portal': 'Visão geral', '/user-portal/tokens': 'Tokens detetados', '/user-portal/positions': 'Posições',
+  '/user-portal': 'Visão geral', '/user-portal/reports': 'Relatório de desempenho', '/user-portal/tokens': 'Tokens detetados', '/user-portal/positions': 'Posições',
   '/user-portal/trades': 'Histórico de operações', '/user-portal/rpcs': 'Infraestrutura RPC',
   '/user-portal/strategy': 'Configuração da estratégia', '/user-portal/wallet': 'Carteira', '/user-portal/logs': 'Registos do sistema',
 };
@@ -108,7 +117,7 @@ function useEventMonitor() {
   const { token } = useMasterAuth();
   const qc = useQueryClient();
   useEffect(() => createEventSocket({
-    getAccessToken: undefined,
+    getAccessToken: () => token,
     onState: next => {
       setState(next);
       if (next === 'connected') {
@@ -120,22 +129,39 @@ function useEventMonitor() {
     },
     onEvent: (event) => {
       setLatest(event);
-      // Older backend workers use snake_case while the API contract uses dot
-      // notation. Normalize both so live simulation marks refresh every view.
       const type = event.type.replaceAll('_', '.');
+      const invalidate = (queryKey: readonly unknown[]) => {
+        void qc.invalidateQueries({ queryKey });
+      };
       if (type.startsWith('bot.') || type === 'health') {
-        void qc.invalidateQueries({ queryKey: getGetDashboardQueryKey() });
-        void qc.invalidateQueries({ queryKey: getGetHealthQueryKey() });
+        invalidate(getGetDashboardQueryKey());
+        invalidate(getGetHealthQueryKey());
       }
-      if (type.startsWith('token.')) void qc.invalidateQueries({ queryKey: getGetTokensQueryKey() });
-      if (type.startsWith('position.')) void qc.invalidateQueries({ queryKey: getGetPositionsQueryKey() });
-      if (type.startsWith('trade.')) void qc.invalidateQueries({ queryKey: getGetTradesQueryKey() });
-      if (type.startsWith('rpc.')) void qc.invalidateQueries({ queryKey: getGetRpcsQueryKey() });
-      if (type.startsWith('log.')) void qc.invalidateQueries({ queryKey: getGetLogsQueryKey() });
-      if (type.startsWith('paper.')) {
-        void qc.invalidateQueries({ queryKey: getGetDashboardQueryKey() });
-        void qc.invalidateQueries({ queryKey: getGetPositionsQueryKey() });
-        void qc.invalidateQueries({ queryKey: getGetTradesQueryKey() });
+      if (type.startsWith('token.')) {
+        invalidate(getGetTokensQueryKey());
+        invalidate(getGetDashboardQueryKey());
+      }
+      if (type.startsWith('position.')) {
+        invalidate(getGetPositionsQueryKey());
+        invalidate(getGetDashboardQueryKey());
+        invalidate(['performance-report']);
+      }
+      if (['trade.', 'buy.', 'sell.', 'entry.', 'exit.'].some(prefix => type.startsWith(prefix))) {
+        invalidate(getGetTradesQueryKey());
+        invalidate(getGetPositionsQueryKey());
+        invalidate(getGetDashboardQueryKey());
+        invalidate(getGetWalletQueryKey());
+        invalidate(['performance-report']);
+        invalidate(getGetLogsQueryKey());
+      }
+      if (type.startsWith('rpc.')) {
+        invalidate(getGetRpcsQueryKey());
+        invalidate(getGetHealthQueryKey());
+        invalidate(getGetDashboardQueryKey());
+      }
+      if (type.startsWith('risk.') || type.startsWith('operational.')) {
+        invalidate(getGetLogsQueryKey());
+        invalidate(getGetDashboardQueryKey());
       }
     },
   }), [token, qc]);
@@ -144,12 +170,14 @@ function useEventMonitor() {
 function AppShell({ children }: { children: ReactNode }) {
   const [path] = useLocation();
   const { signOut } = useMasterAuth();
+  const eventMonitor = useEventMonitor();
   const user: { primaryEmailAddress?: { emailAddress?: string } } | null = null;
   const health = useGetHealth({ query: { queryKey: getGetHealthQueryKey(), refetchInterval: 15000 } });
+  const liveDashboard = useGetDashboard({ query: { queryKey: getGetDashboardQueryKey(), refetchInterval: LIVE_DATA_REFRESH_MS } });
   const stream = health.data?.eventMonitorStatus;
   const [mobileMenu, setMobileMenu] = useState(false);
   const current = titleMap[path] || 'Centro de operações';
-  return <div className="shell flex">
+  return <EventMonitorContext.Provider value={eventMonitor}><div className="shell flex">
     <aside className="sidebar hidden min-h-[100dvh] shrink-0 flex-col px-3 py-4 md:flex">
       <Link href="/user-portal" className="mb-8 flex items-center gap-3 px-2 no-underline">
         <img src={`${basePath}/logo.svg`} alt="Marca Solana Sniper" className="h-9 w-9 rounded-lg" />
@@ -164,14 +192,14 @@ function AppShell({ children }: { children: ReactNode }) {
     </aside>
     <main className="main-area">
       <header className="topbar flex items-center justify-between px-4 sm:px-6">
-        <div className="flex items-center gap-3"><button className="button button-small md:hidden" aria-label="Abrir navegação" onClick={() => setMobileMenu(!mobileMenu)}><Menu size={16} /></button><span className="text-sm font-medium">{current}</span><span className="hidden rounded border border-[hsl(var(--border))] px-2 py-1 text-[10px] mono muted sm:inline">API · STATUS</span></div>
+         <div className="flex items-center gap-3"><button className="button button-small md:hidden" aria-label="Abrir navegação" onClick={() => setMobileMenu(!mobileMenu)}><Menu size={16} /></button><span className="text-sm font-medium">{current}</span><span className="flex items-center gap-2 rounded border border-[hsl(var(--border))] px-2 py-1 text-[10px] mono sm:inline-flex"><span className="eyebrow">MODO</span><span className={liveDashboard.data?.mode === 'simulation' ? 'positive' : liveDashboard.data?.mode === 'real' ? 'warning' : 'muted'}>{liveDashboard.data?.mode === 'simulation' ? 'SIMULAÇÃO PAPER' : liveDashboard.data?.mode === 'real' ? 'SNIPER REAL' : 'INDISPONÍVEL'}</span></span></div>
         <div className="flex items-center gap-3"><div className="hidden items-center gap-2 text-xs muted sm:flex"><span className={`status-dot ${stream === 'connected' ? 'positive' : stream === 'disconnected' ? 'warning' : 'technical'}`} />{stream === 'connected' ? 'Fluxo ligado' : stream === 'disconnected' ? 'Fluxo desligado' : 'Fluxo indisponível'}</div><button className="button button-small" title="Notificações indisponíveis" aria-label="Notificações indisponíveis" disabled><Bell size={15} /></button><div className="h-7 w-px bg-[hsl(var(--border))]" /><span className="hidden max-w-36 truncate text-xs muted sm:inline">{user?.primaryEmailAddress?.emailAddress || 'Sessão autenticada'}</span><button className="button button-small" onClick={() => signOut({ redirectUrl: basePath || '/' })} aria-label="Terminar sessão"><LogOut size={14} /><span className="hide-mobile">Sair</span></button></div>
       </header>
       {mobileMenu && <nav className="grid grid-cols-2 gap-1 border-b border-[hsl(var(--border))] bg-[hsl(var(--sidebar))] p-2 md:hidden">{navItems.map(({ href, label, icon: Icon }) => <Link href={href} key={href} className={`nav-link ${path === href ? 'active' : ''}`} onClick={() => setMobileMenu(false)}><Icon size={16} />{label}</Link>)}</nav>}
       {children}
       <nav className="mobile-nav md:hidden" aria-label="Navegação móvel">{navShort.map(({ href, label, icon: Icon }) => <Link href={href} key={href} className={path === href ? 'active' : ''}><Icon size={17} /><span>{label.split(' ')[0]}</span></Link>)}</nav>
     </main>
-  </div>;
+  </div></EventMonitorContext.Provider>;
 }
 function HomePage() {
   return <main className="min-h-[100dvh] overflow-hidden">
@@ -185,9 +213,9 @@ function HomePage() {
 }
 
 function DashboardPage() {
-  const dash = useGetDashboard({ query: { queryKey: getGetDashboardQueryKey(), refetchInterval: 15000 } });
+  const dash = useGetDashboard({ query: { queryKey: getGetDashboardQueryKey(), refetchInterval: LIVE_DATA_REFRESH_MS } });
   const health = useGetHealth({ query: { queryKey: getGetHealthQueryKey(), refetchInterval: 15000 } });
-  const { state: eventState, latest } = useEventMonitor();
+  const { state: eventState, latest } = useContext(EventMonitorContext);
   const start = useStartBot(), stop = useStopBot(), pause = usePauseBot(), resume = useResumeBot();
   const busy = start.isPending || stop.isPending || pause.isPending || resume.isPending;
   const backendAvailable = health.data?.status === 'ok';
@@ -197,6 +225,7 @@ function DashboardPage() {
     else notify({ text: result?.message || 'O back-end não confirmou o pedido.', kind: 'error' });
   }).catch(() => notify({ text: 'Aguardando conexão com o back-end', kind: 'error' }));
   const d = dash.data;
+  const totalEstimatedPnl = d?.totalEstimatedPnlSol ?? d?.netPnlSol;
   const balancePoints = (d?.balanceHistory || []).filter(p => p.value != null);
   const resultChartData = (d?.cumulativeResult || []).filter(p => p.value != null).map(p => ({ timestamp: p.timestamp, value: p.value as number }));
   const tradesByPeriod = d?.tradesByPeriod ?? [];
@@ -221,32 +250,36 @@ function DashboardPage() {
           {d.botStatus === 'paused' && <><button className="button button-primary button-small" disabled={busy || !backendAvailable} onClick={() => runAction(() => resume.mutateAsync(), 'Retomar')}><CirclePlay size={14} /> Retomar estratégia</button><button className="button button-danger button-small" disabled={busy || !backendAvailable} onClick={() => runAction(() => stop.mutateAsync(), 'Parar')}><X size={14} /> Parar novas operações</button></>}
         </div>
       </div>
+      <p className="mb-3 mt-0 text-right text-[10px] muted" role="status">
+        Atualizado às {new Date(dash.dataUpdatedAt).toLocaleTimeString('pt-BR')} · {eventState === 'connected' ? 'eventos ao vivo + consulta de segurança a cada 5 s' : 'consulta de segurança a cada 5 s; fluxo de eventos reconectando'}
+      </p>
       {d.botStatus === 'running' && <p className="mb-4 mt-0 text-xs warning">Parar interrompe novas operações; não fecha posições existentes.</p>}
       <div className="mb-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <Metric label="Tokens detetados" value={fmt(d.detectedTokens, 0)} />
         <Metric label="Tokens analisados" value={fmt(d.analyzedTokens, 0)} />
-        <Metric label="Operações" value={fmt(d.tradesCount, 0)} />
+        <Metric label="Operações encerradas" value={fmt(d.closedTrades ?? d.tradesCount, 0)} note="Ciclos de compra e venda concluídos" />
         <Metric label="Posições abertas" value={fmt(d.openPositions, 0)} />
-        <Metric label={d.mode === 'simulation' ? 'Património virtual' : 'Saldo da carteira'} value={fmt(d.walletBalanceSol)} suffix="SOL" />
-        <Metric label="Reserva de taxas" value={fmt(d.feesReserveSol)} suffix="SOL" />
-        <Metric label="P&L realizado" value={fmt(d.realizedPnlSol)} suffix="SOL" tone={d.realizedPnlSol == null ? undefined : d.realizedPnlSol >= 0 ? 'positive' : 'negative'} />
-        <Metric label="P&L estimado · aberto" value={fmt(d.estimatedOpenPnlSol)} suffix="SOL" tone={d.estimatedOpenPnlSol == null ? undefined : d.estimatedOpenPnlSol >= 0 ? 'technical' : 'warning'} note="Estimativa, não resultado realizado" />
+        <Metric label={d.mode === 'simulation' ? 'Saldo disponível paper' : 'Saldo da carteira'} value={fmtSol(d.walletBalanceSol)} suffix="SOL" note={d.walletBalanceAvailable === false ? 'Leitura indisponível; zero não será presumido.' : undefined} />
+        {d.mode === 'simulation' && <Metric label="Patrimônio virtual paper" value={fmtSol(d.virtualEquitySol)} suffix="SOL" note={d.estimatedOpenPnlComplete === false ? 'Estimativa parcial: falta marca em uma ou mais posições.' : 'Inclui posições abertas pela última marca disponível.'} />}
+        <Metric label="Reserva de taxas" value={fmtSol(d.feesReserveSol)} suffix="SOL" />
+        <Metric label={d.mode === 'simulation' ? 'P&L realizado · paper' : 'P&L realizado · on-chain'} value={fmtSol(d.realizedPnlSol)} suffix="SOL" tone={d.realizedPnlSol == null ? undefined : d.realizedPnlSol >= 0 ? 'positive' : 'negative'} />
+        <Metric label="P&L aberto estimado" value={fmtSol(d.estimatedOpenPnlSol)} suffix="SOL" tone={d.estimatedOpenPnlSol == null ? undefined : d.estimatedOpenPnlSol >= 0 ? 'technical' : 'warning'} note={d.estimatedOpenPnlComplete === false ? `${fmt(d.unmarkedOpenPositions, 0)} posição(ões) sem marca; soma parcial.` : d.mode === 'simulation' ? 'Estimativa paper por market cap; ainda não é resultado fechado.' : 'Estimativa por market cap; apenas vendas confirmadas são realizadas.'} />
       </div>
       <div className="mb-4 grid gap-3 lg:grid-cols-[1.4fr_.8fr]">
-        <section className="panel"><PanelTitle title="Histórico do saldo" aside={<span className="eyebrow">SOL · API</span>} />
-          {line ? <div className="px-4 py-5"><svg viewBox="0 0 100 100" preserveAspectRatio="none" className="h-44 w-full overflow-visible" role="img" aria-label="Histórico do saldo reportado pelo back-end"><defs><linearGradient id="chart-fill" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stopColor="#55d99a" stopOpacity=".22" /><stop offset="1" stopColor="#55d99a" stopOpacity="0" /></linearGradient></defs><path d={`${line} L100 100 L0 100 Z`} className="chart-area" /><path d={line} className="chart-line" /></svg><div className="mt-3 flex justify-between text-[10px] mono muted"><span>{fmtDate(balancePoints[0]?.timestamp)}</span><span>{fmtDate(balancePoints.at(-1)?.timestamp)}</span></div></div> : <EmptyRows>Histórico indisponível ou sem pontos válidos.</EmptyRows>}
+        <section className="panel"><PanelTitle title={d.mode === 'simulation' ? 'Evolução do patrimônio paper' : 'Histórico do saldo SOL'} aside={<span className="eyebrow">SOL · API</span>} />
+          {line ? <div className="px-4 py-5"><svg viewBox="0 0 100 100" preserveAspectRatio="none" className="h-44 w-full overflow-visible" role="img" aria-label={d.mode === 'simulation' ? 'Evolução do património paper' : 'Histórico do saldo SOL'}><defs><linearGradient id="chart-fill" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stopColor="#55d99a" stopOpacity=".22" /><stop offset="1" stopColor="#55d99a" stopOpacity="0" /></linearGradient></defs><path d={`${line} L100 100 L0 100 Z`} className="chart-area" /><path d={line} className="chart-line" /></svg><div className="mt-3 flex justify-between text-[10px] mono muted"><span>{fmtDate(balancePoints[0]?.timestamp)}</span><span>{fmtDate(balancePoints.at(-1)?.timestamp)}</span></div></div> : <EmptyRows>{d.mode === 'real' ? 'O saldo SOL atual é exibido acima; histórico de saldo live não é persistido. Consulte abaixo a curva de P&L confirmado.' : 'Aguardando pontos de patrimônio paper.'}</EmptyRows>}
         </section>
-        <section className="panel"><PanelTitle title="Resultado acumulado" /><div className="grid grid-cols-2 gap-3 p-4"><Metric label="Líquido" value={fmt(d.netPnlSol)} suffix="SOL" tone={d.netPnlSol == null ? undefined : d.netPnlSol >= 0 ? 'positive' : 'negative'} /><Metric label="Custos" value={fmt(d.costsSol)} suffix="SOL" tone={d.costsSol == null ? undefined : 'warning'} /><div className="col-span-2 rounded-md border border-[hsl(var(--border))] p-3"><div className="eyebrow mb-3">OPERAÇÕES POR PERÍODO</div>{tradesByPeriod.length ? tradesByPeriod.map((p) => <div key={p.period} className="flex justify-between border-t border-[hsl(var(--border))] py-2 text-xs"><span>{p.period}</span><span><b className={p.positive == null ? 'muted' : 'positive'}>{fmt(p.positive, 0)}</b><span className="mx-2 muted">/</span><b className={p.negative == null ? 'muted' : 'negative'}>{fmt(p.negative, 0)}</b><span className="ml-2 muted">de {fmt(p.total, 0)}</span></span></div>) : <div className="text-xs muted">Indisponível</div>}</div></div></section>
+        <section className="panel"><PanelTitle title="Resultado total estimado" /><div className="grid grid-cols-2 gap-3 p-4"><Metric label="Realizado + aberto estimado" value={fmtSol(totalEstimatedPnl)} suffix="SOL" tone={totalEstimatedPnl == null ? undefined : totalEstimatedPnl >= 0 ? 'positive' : 'negative'} note={d.totalEstimatedPnlComplete === false ? 'Parcial: há posições sem marca de preço.' : 'A parcela aberta é estimada, não uma venda confirmada.'} /><Metric label="Custos" value={fmtSol(d.costsSol)} suffix="SOL" tone={d.costsSol == null ? undefined : 'warning'} /><div className="col-span-2 rounded-md border border-[hsl(var(--border))] p-3"><div className="eyebrow mb-3">OPERAÇÕES POR PERÍODO</div>{tradesByPeriod.length ? tradesByPeriod.map((p) => <div key={p.period} className="flex justify-between border-t border-[hsl(var(--border))] py-2 text-xs"><span>{p.period}</span><span><b className={p.positive == null ? 'muted' : 'positive'}>{fmt(p.positive, 0)}</b><span className="mx-2 muted">/</span><b className={p.negative == null ? 'muted' : 'negative'}>{fmt(p.negative, 0)}</b><span className="ml-2 muted">de {fmt(p.total, 0)}</span></span></div>) : <div className="text-xs muted">Indisponível</div>}</div></div></section>
       </div>
       <div className="mb-4 grid gap-3 xl:grid-cols-2">
-        <section className="panel"><PanelTitle title="Evolução do resultado líquido" aside={<span className="eyebrow">SOL · API</span>} />{resultChartData.length ? <div className="p-4"><ResponsiveContainer width="100%" height={210}><AreaChart data={resultChartData}><CartesianGrid strokeDasharray="3 3" stroke="hsl(210 12% 24%)" /><XAxis dataKey="timestamp" tickFormatter={value => new Date(String(value)).toLocaleDateString('pt-BR')} tick={{ fill: '#8997a1', fontSize: 10 }} /><YAxis tick={{ fill: '#8997a1', fontSize: 10 }} /><ChartTooltip formatter={value => [fmt(Number(value)), 'SOL']} labelFormatter={value => fmtDate(String(value))} /><Area type="monotone" dataKey="value" name="Resultado líquido" stroke="#55d99a" fill="#55d99a" fillOpacity={0.14} connectNulls={false} dot={{ r: 3, fill: '#55d99a' }} /></AreaChart></ResponsiveContainer></div> : <EmptyRows>Série de resultado líquido indisponível.</EmptyRows>}</section>
+        <section className="panel"><PanelTitle title="P&L realizado acumulado" aside={<span className="eyebrow">SOL · OPERAÇÕES FECHADAS</span>} />{resultChartData.length ? <div className="p-4"><ResponsiveContainer width="100%" height={210}><AreaChart data={resultChartData}><CartesianGrid strokeDasharray="3 3" stroke="hsl(210 12% 24%)" /><XAxis dataKey="timestamp" tickFormatter={value => new Date(String(value)).toLocaleDateString('pt-BR')} tick={{ fill: '#8997a1', fontSize: 10 }} /><YAxis tick={{ fill: '#8997a1', fontSize: 10 }} /><ChartTooltip formatter={value => [fmtSol(Number(value)), 'SOL']} labelFormatter={value => fmtDate(String(value))} /><Area type="monotone" dataKey="value" name="P&L realizado" stroke="#55d99a" fill="#55d99a" fillOpacity={0.14} connectNulls={false} dot={{ r: 3, fill: '#55d99a' }} /></AreaChart></ResponsiveContainer></div> : <EmptyRows>Série de resultado realizado indisponível.</EmptyRows>}</section>
         <section className="panel"><PanelTitle title="Operações por período" aside={<span className="eyebrow">CONTAGEM · API</span>} />{tradeChartData.length ? <div className="p-4"><ResponsiveContainer width="100%" height={210}><BarChart data={tradeChartData}><CartesianGrid strokeDasharray="3 3" stroke="hsl(210 12% 24%)" /><XAxis dataKey="period" tick={{ fill: '#8997a1', fontSize: 10 }} /><YAxis allowDecimals={false} tick={{ fill: '#8997a1', fontSize: 10 }} /><ChartTooltip /><Bar dataKey="total" name="Total" fill="#66b2ff" radius={[3, 3, 0, 0]} /><Bar dataKey="positive" name="Positivas" fill="#55d99a" radius={[3, 3, 0, 0]} /><Bar dataKey="negative" name="Negativas" fill="#ef7772" radius={[3, 3, 0, 0]} /></BarChart></ResponsiveContainer></div> : <EmptyRows>Contagem por período indisponível.</EmptyRows>}</section>
         <section className="panel"><PanelTitle title="Distribuição dos resultados" aside={<span className="eyebrow">OPERAÇÕES · API</span>} />{outcomeData.length && outcomeData.some(entry => entry.value > 0) ? <div className="flex items-center justify-center gap-5 p-4"><ResponsiveContainer width="65%" height={190}><PieChart><Pie data={outcomeData} dataKey="value" nameKey="name" innerRadius={48} outerRadius={72} paddingAngle={3}>{outcomeData.map((entry, index) => <Cell key={entry.name} fill={index === 0 ? '#55d99a' : '#ef7772'} />)}</Pie><ChartTooltip /></PieChart></ResponsiveContainer><div className="space-y-3 text-xs"><div><span className="positive">● Positivas</span><div className="mono mt-1">{fmt(outcomeData[0]?.value, 0)}</div></div><div><span className="negative">● Negativas</span><div className="mono mt-1">{fmt(outcomeData[1]?.value, 0)}</div></div></div></div> : <EmptyRows>Distribuição indisponível ou sem operações classificadas.</EmptyRows>}</section>
-        <section className="panel"><PanelTitle title="Histórico do saldo" aside={<span className="eyebrow">SOL · API</span>} />{balancePoints.length ? <div className="p-4"><ResponsiveContainer width="100%" height={210}><AreaChart data={balancePoints}><CartesianGrid strokeDasharray="3 3" stroke="hsl(210 12% 24%)" /><XAxis dataKey="timestamp" tickFormatter={value => new Date(String(value)).toLocaleDateString('pt-BR')} tick={{ fill: '#8997a1', fontSize: 10 }} /><YAxis tick={{ fill: '#8997a1', fontSize: 10 }} /><ChartTooltip formatter={value => [fmt(Number(value)), 'SOL']} labelFormatter={value => fmtDate(String(value))} /><Area type="monotone" dataKey="value" name="Saldo" stroke="#66b2ff" fill="#66b2ff" fillOpacity={0.14} dot={{ r: 3, fill: '#66b2ff' }} /></AreaChart></ResponsiveContainer></div> : <EmptyRows>Histórico de saldo indisponível ou sem pontos válidos.</EmptyRows>}</section>
+        <section className="panel"><PanelTitle title="Histórico do saldo" aside={<span className="eyebrow">SOL · API</span>} />{balancePoints.length ? <div className="p-4"><ResponsiveContainer width="100%" height={210}><AreaChart data={balancePoints}><CartesianGrid strokeDasharray="3 3" stroke="hsl(210 12% 24%)" /><XAxis dataKey="timestamp" tickFormatter={value => new Date(String(value)).toLocaleDateString('pt-BR')} tick={{ fill: '#8997a1', fontSize: 10 }} /><YAxis tick={{ fill: '#8997a1', fontSize: 10 }} /><ChartTooltip formatter={value => [fmtSol(Number(value)), 'SOL']} labelFormatter={value => fmtDate(String(value))} /><Area type="monotone" dataKey="value" name="Saldo" stroke="#66b2ff" fill="#66b2ff" fillOpacity={0.14} dot={{ r: 3, fill: '#66b2ff' }} /></AreaChart></ResponsiveContainer></div> : <EmptyRows>Histórico de saldo indisponível ou sem pontos válidos.</EmptyRows>}</section>
       </div>
       <div className="grid gap-3 lg:grid-cols-2">
         <section className="panel"><PanelTitle title="Saúde dos serviços" /><div className="space-y-3 p-4 text-sm"><div className="flex justify-between"><span className="muted">API</span><StatusTag value={health.data?.status || (health.isError ? 'unavailable' : undefined)} positive={['ok']} warning={['degraded']} negative={['unavailable']} /></div><div className="flex justify-between"><span className="muted">Monitor de eventos</span><StatusTag value={health.data?.eventMonitorStatus || eventState} positive={['connected']} warning={['unknown', 'connecting']} negative={['disconnected', 'unavailable']} /></div><div className="flex justify-between text-xs"><span className="muted">Verificado</span><span className="mono">{fmtDate(health.data?.checkedAt)}</span></div></div></section>
-        <section className="panel"><PanelTitle title="Monitor de eventos" aside={<span className="text-xs muted">{eventState === 'connected' ? 'Ligado' : eventState === 'connecting' ? 'A ligar' : 'Desligado'}</span>} /><div className="p-4">{latest ? <div className="flex items-start gap-3"><Radio className="technical mt-0.5" size={16} /><div><div className="mono text-xs">{latest.type}</div><div className="mt-1 text-xs muted">{fmtDate(latest.timestamp)}</div></div></div> : <p className="m-0 text-xs muted">Aguardando conexão com o back-end</p>}</div></section>
+        <section className="panel"><PanelTitle title="Monitor de eventos" aside={<span className="text-xs muted">{eventState === 'connected' ? 'Ligado' : eventState === 'connecting' ? 'A ligar' : 'Desligado'}</span>} /><div className="p-4">{latest ? <div className="flex items-start gap-3"><Radio className="technical mt-0.5" size={16} /><div><div className="mono text-xs">{latest.type}</div><div className="mt-1 text-xs muted">{fmtDate(latest.at ?? latest.timestamp)}</div></div></div> : <p className="m-0 text-xs muted">Aguardando conexão com o back-end</p>}</div></section>
       </div>
       <section className="panel mt-4"><PanelTitle title="Operações recentes" aside={<Link href="/user-portal/trades" className="text-xs technical no-underline">Ver histórico <ArrowRight size={13} className="inline" /></Link>} />{recentTrades.length ? <TradesTable items={recentTrades} /> : <EmptyRows />}</section>
     </>}
@@ -254,7 +287,24 @@ function DashboardPage() {
 }
 
 function TradesTable({ items }: { items: any[] }) {
-  return <div className="table-wrap"><table><thead><tr><th>Data</th><th>Token / Mint</th><th>Lado</th><th>Quantidade</th><th>Valor SOL</th><th>Taxas</th><th>Slippage</th><th>Resultado bruto</th><th>Resultado líquido</th><th>Estado</th><th>Explorer / ID</th></tr></thead><tbody>{items.map((t) => { const transactionId = t.transactionId || t.signature; const openPaperPosition = t.side === 'buy' && t.status === 'confirmed' && t.grossPnlSol == null; const pnlDisplay = (value: number | null | undefined) => value == null ? (openPaperPosition ? 'Em aberto' : '—') : fmt(value); return <tr key={t.id}><td className="whitespace-nowrap text-xs muted">{fmtDate(t.timestamp)}</td><td><div className="text-xs font-medium">{t.symbol || t.tokenName || 'Token sem nome'}</div><div className="mono mt-1 text-[10px] muted">{shortKey(t.mint)}</div></td><td><span className={t.side === 'buy' ? 'technical' : 'warning'}>{t.side === 'buy' ? 'Compra' : 'Venda'}</span></td><td className="mono text-xs">{fmt(t.quantity)}</td><td className="mono text-xs">{fmt(t.side === 'buy' ? t.buyValueSol : t.sellValueSol)}</td><td className="mono text-xs">{fmt(t.feesSol)}</td><td className="mono text-xs">{t.slippage == null ? '—' : `${fmt(t.slippage, 2)}%`}</td><td className={`mono text-xs ${t.grossPnlSol == null ? 'muted' : t.grossPnlSol >= 0 ? 'positive' : 'negative'}`}>{pnlDisplay(t.grossPnlSol)}</td><td className={`mono text-xs ${t.netPnlSol == null ? 'muted' : t.netPnlSol >= 0 ? 'positive' : 'negative'}`}>{pnlDisplay(t.netPnlSol)}</td><td><StatusTag value={t.status} positive={['confirmed']} negative={['failed']} warning={['pending', 'submitted']} /></td><td><div className="flex items-center gap-2">{isSignature(t.signature) && <a className="technical text-xs" href={`https://solscan.io/tx/${encodeURIComponent(t.signature)}`} target="_blank" rel="noreferrer" aria-label="Ver assinatura no Solscan">Abrir <ExternalLink className="inline" size={12} /></a>}{transactionId ? <><span className="mono text-xs muted">{shortKey(transactionId)}</span><button type="button" className="button button-small" aria-label="Copiar identificador da transação" onClick={() => void copyValue(transactionId, 'Identificador da transação')}><Copy size={12} /></button></> : <span className="muted">—</span>}</div></td></tr>; })}</tbody></table></div>;
+  return <div className="table-wrap"><table><thead><tr><th>Data</th><th>Token / Mint</th><th>Lado</th><th>Quantidade</th><th>Valor SOL</th><th>Taxas</th><th>Slippage</th><th>P&L bruto do ciclo</th><th>P&L líquido do ciclo</th><th>Motivo</th><th>Estado</th><th>Explorer / ID</th></tr></thead><tbody>{items.map((t) => {
+    const transactionId = t.transactionId || t.signature;
+    const pnlDisplay = (value: number | null | undefined) => value == null ? (t.side === 'buy' ? '—' : 'Indisponível') : fmtSol(value);
+    return <tr key={t.id}>
+      <td className="whitespace-nowrap text-xs muted">{fmtDate(t.timestamp)}</td>
+      <td><div className="text-xs font-medium">{t.symbol || t.tokenName || 'Token sem nome'}</div><div className="mono mt-1 text-[10px] muted">{shortKey(t.mint)}</div></td>
+      <td><span className={t.side === 'buy' ? 'technical' : 'warning'}>{t.side === 'buy' ? 'Compra' : 'Venda'}</span></td>
+      <td className="mono text-xs">{fmt(t.quantity)}</td>
+      <td className="mono text-xs">{fmtSol(t.side === 'buy' ? t.buyValueSol : t.sellValueSol)}</td>
+      <td className="mono text-xs">{fmtSol(t.feesSol)}</td>
+      <td className="mono text-xs">{t.slippage == null ? '—' : `${fmt(t.slippage, 2)}%`}</td>
+      <td className={`mono text-xs ${t.grossPnlSol == null ? 'muted' : t.grossPnlSol >= 0 ? 'positive' : 'negative'}`}>{pnlDisplay(t.grossPnlSol)}</td>
+      <td className={`mono text-xs ${t.netPnlSol == null ? 'muted' : t.netPnlSol >= 0 ? 'positive' : 'negative'}`}>{pnlDisplay(t.netPnlSol)}</td>
+      <td className="text-xs">{t.side === 'sell' ? t.exitReason || 'outros' : '—'}</td>
+      <td><StatusTag value={t.status} positive={['confirmed']} negative={['failed']} warning={['pending', 'submitted']} /></td>
+      <td><div className="flex items-center gap-2">{isSignature(t.signature) && <a className="technical text-xs" href={`https://solscan.io/tx/${encodeURIComponent(t.signature)}`} target="_blank" rel="noreferrer" aria-label="Ver assinatura no Solscan">Abrir <ExternalLink className="inline" size={12} /></a>}{transactionId ? <><span className="mono text-xs muted">{shortKey(transactionId)}</span><button type="button" className="button button-small" aria-label="Copiar identificador da transação" onClick={() => void copyValue(transactionId, 'Identificador da transação')}><Copy size={12} /></button></> : <span className="muted">—</span>}</div></td>
+    </tr>;
+  })}</tbody></table></div>;
 }
 function isSignature(value: unknown): value is string { return typeof value === 'string' && /^[1-9A-HJ-NP-Za-km-z]{64,90}$/.test(value); }
 async function copyValue(value: string, label: string) {
@@ -283,11 +333,11 @@ function TokensPage() {
   const [detectedTo, setDetectedTo] = useState('');
   const [cursor, setCursor] = useState<string | undefined>();
   const params = useMemo<GetTokensParams>(() => ({ limit: 30, ...(filter ? { status: filter as GetTokensParams['status'] } : {}), ...(mint ? { mint } : {}), ...(detectedFrom ? { detectedFrom: new Date(detectedFrom).toISOString() } : {}), ...(detectedTo ? { detectedTo: new Date(detectedTo).toISOString() } : {}), ...(cursor ? { cursor } : {}) }), [filter, mint, detectedFrom, detectedTo, cursor]);
-  const page = useGetTokens(params);
+  const page = useGetTokens(params, { query: { refetchInterval: LIVE_DATA_REFRESH_MS } });
   return <DataPageFrame description="Fluxo de descoberta e triagem reportado pela API.">
     <section className="panel mb-4 p-4"><div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4"><label className="text-xs muted">Estado<select className="select mt-1" value={filter} onChange={e => { setFilter(e.target.value); setCursor(undefined); }} aria-label="Filtrar por estado de análise" data-testid="select-token-status"><option value="">Todos os estados</option>{['detected','analyzing','approved','rejected','buy_submitted','buy_confirmed','buy_failed','position_open','sell_submitted','sell_confirmed'].map(x => <option value={x} key={x}>{x.replaceAll('_',' ')}</option>)}</select></label><label className="text-xs muted">Endereço mint<input className="input mt-1 mono" placeholder="Filtrar pelo mint" value={mint} onChange={e => { setMint(e.target.value); setCursor(undefined); }} /></label><label className="text-xs muted">Detetado a partir de<input type="datetime-local" className="input mt-1" value={detectedFrom} onChange={e => { setDetectedFrom(e.target.value); setCursor(undefined); }} /></label><label className="text-xs muted">Detetado até<input type="datetime-local" className="input mt-1" value={detectedTo} onChange={e => { setDetectedTo(e.target.value); setCursor(undefined); }} /></label></div></section>
     <QueryState loading={page.isLoading} error={page.isError} onRetry={() => void page.refetch()} />
-    {!page.isLoading && !page.isError && <section className="panel"><PanelTitle title="Deteções" aside={<span className="eyebrow">{page.data?.items.length ?? 0} REGISTOS</span>} />{page.data?.items.length ? <div className="table-wrap"><table><thead><tr><th>Detetado</th><th>Token</th><th>Mint / Criador</th><th>Análise</th><th>Liquidez</th><th>Trades</th><th>Risco / motivo</th><th>Operação</th></tr></thead><tbody>{page.data.items.map(t => <tr key={t.id}><td className="whitespace-nowrap text-xs muted">{fmtDate(t.detectedAt)}</td><td><div className="text-xs font-medium">{t.name || t.symbol || 'Token sem nome'}</div><div className="mono mt-1 text-[10px] muted">{t.symbol || 'Símbolo indisponível'}</div></td><td><div className="mono text-xs">{shortKey(t.mint)}</div><div className="mt-1 flex items-center gap-2"><span className="text-[10px] muted">Criador: {shortKey(t.creatorWallet)}</span><button type="button" className="button button-small" aria-label="Copiar endereço mint" onClick={() => void copyValue(t.mint, 'Endereço mint')}><Copy size={12} /></button></div></td><td><StatusTag value={t.analysisStatus} positive={['approved']} negative={['rejected', 'buy_failed']} warning={['detected', 'analyzing']} /></td><td className="mono text-xs">{fmt(t.liquiditySol)}</td><td className="mono text-xs">{fmt(t.tradeCount, 0)}</td><td><div className="text-xs">{t.riskResult || 'Indisponível'}</div><div className="mt-1 max-w-52 text-xs muted">{t.decisionReason || 'Indisponível'}</div></td><td><StatusTag value={t.operationStatus} positive={['buy_confirmed', 'position_open', 'sell_confirmed']} negative={['buy_failed']} warning={['buy_submitted', 'sell_submitted']} /></td></tr>)}</tbody></table></div> : <EmptyRows>Não existem tokens para os filtros selecionados.</EmptyRows>}<Pagination nextCursor={page.data?.nextCursor} setCursor={setCursor} cursor={cursor} /></section>}
+     {!page.isLoading && !page.isError && <section className="panel"><PanelTitle title="Deteções" aside={<span className="eyebrow">{page.data?.items.length ?? 0} REGISTOS</span>} />{page.data?.items.length ? <div className="table-wrap"><table><thead><tr><th>Detetado</th><th>Token</th><th>Mint / Criador</th><th>Análise</th><th>Liquidez</th><th>Trades</th><th>Risco / motivo</th><th>Operação</th></tr></thead><tbody>{page.data.items.map(t => <tr key={t.id}><td className="whitespace-nowrap text-xs muted">{fmtDate(t.detectedAt)}</td><td><div className="text-xs font-medium">{t.name || t.symbol || 'Token sem nome'}</div><div className="mono mt-1 text-[10px] muted">{t.symbol || 'Símbolo indisponível'}</div></td><td><div className="mono text-xs">{shortKey(t.mint)}</div><div className="mt-1 flex items-center gap-2"><span className="text-[10px] muted">Criador: {shortKey(t.creatorWallet)}</span><button type="button" className="button button-small" aria-label="Copiar endereço mint" onClick={() => void copyValue(t.mint, 'Endereço mint')}><Copy size={12} /></button></div></td><td><StatusTag value={t.analysisStatus} positive={['approved']} negative={['rejected', 'buy_failed']} warning={['detected', 'analyzing']} /></td><td className="mono text-xs">{fmtSol(t.liquiditySol)}</td><td className="mono text-xs">{fmt(t.tradeCount, 0)}</td><td><div className="text-xs">{t.riskResult || 'Indisponível'}</div><div className="mt-1 max-w-52 text-xs muted">{t.decisionReason || 'Indisponível'}</div></td><td><StatusTag value={t.operationStatus} positive={['buy_confirmed', 'position_open', 'sell_confirmed']} negative={['buy_failed']} warning={['buy_submitted', 'sell_submitted']} /></td></tr>)}</tbody></table></div> : <EmptyRows>Não existem tokens para os filtros selecionados.</EmptyRows>}<Pagination nextCursor={page.data?.nextCursor} setCursor={setCursor} cursor={cursor} /></section>}
   </DataPageFrame>;
 }
 function Pagination({ nextCursor, setCursor, cursor }: { nextCursor?: string | null; setCursor: (v?: string) => void; cursor?: string }) {
@@ -298,7 +348,7 @@ function PositionsPage() {
   const [status, setStatus] = useState('');
   const [cursor, setCursor] = useState<string | undefined>();
   const params = useMemo<GetPositionsParams>(() => ({ limit: 30, ...(status ? { status: status as GetPositionsParams['status'] } : {}), ...(cursor ? { cursor } : {}) }), [status, cursor]);
-  const page = useGetPositions(params);
+  const page = useGetPositions(params, { query: { refetchInterval: LIVE_DATA_REFRESH_MS } });
   const sell = useRequestPositionSell();
   const qc = useQueryClient();
   const [sellId, setSellId] = useState<string | null>(null);
@@ -307,7 +357,31 @@ function PositionsPage() {
   return <DataPageFrame description="Exposição e estados de venda enviados pelo back-end.">
     <div className="mb-4 flex items-center gap-2"><ListFilter size={15} className="muted" /><select className="select w-auto min-w-40" value={status} onChange={e => { setStatus(e.target.value); setCursor(undefined); }} aria-label="Filtrar posições"><option value="">Todos os estados</option>{['open','closing','closed','failed'].map(x => <option key={x} value={x}>{x}</option>)}</select></div>
     <QueryState loading={page.isLoading} error={page.isError} onRetry={() => void page.refetch()} />
-    {!page.isLoading && !page.isError && <section className="panel"><PanelTitle title="Posições" aside={<span className="eyebrow">{page.data?.items.length ?? 0} REGISTOS</span>} />{page.data?.items.length ? <div className="table-wrap"><table><thead><tr><th>Token / Mint</th><th>Quantidade</th><th>Entrada média</th><th>Investido</th><th>Custos</th><th>Valor estimado</th><th>P&L estimado</th><th>Realizado</th><th>Aberta</th><th>Tempo desde entrada</th><th>Estado / venda</th><th>Ação</th></tr></thead><tbody>{page.data.items.map(p => <tr key={p.id}><td><div className="text-xs font-medium">{p.symbol || p.tokenName || 'Token sem nome'}</div><div className="mono mt-1 text-[10px] muted">{shortKey(p.mint)}</div></td><td className="mono text-xs">{fmt(p.quantity)}</td><td className="mono text-xs">{fmt(p.averageEntryPriceSol)}</td><td className="mono text-xs">{fmt(p.buyValueSol)}</td><td className="mono text-xs">{fmt(p.costsSol)}</td><td className="mono text-xs">{fmt(p.estimatedValueSol)}</td><td className={`mono text-xs ${p.estimatedPnlSol == null ? 'muted' : p.estimatedPnlSol >= 0 ? 'positive' : 'negative'}`}>{fmt(p.estimatedPnlSol)}</td><td className={`mono text-xs ${p.realizedPnlSol == null ? 'muted' : p.realizedPnlSol >= 0 ? 'positive' : 'negative'}`}>{fmt(p.realizedPnlSol)}</td><td className="whitespace-nowrap text-xs muted">{fmtDate(p.openedAt)}</td><td className="whitespace-nowrap text-xs muted">{elapsedSince(p.openedAt)}</td><td><StatusTag value={p.status} positive={['open', 'closed']} warning={['closing']} negative={['failed']} /><div className="mt-1"><StatusTag value={p.sellStatus} positive={['confirmed']} warning={['submitted']} negative={['failed']} /></div></td><td><button className="button button-small button-danger" disabled={p.status !== 'open' || sell.isPending} onClick={() => setSellId(p.id)}>Solicitar venda</button></td></tr>)}</tbody></table></div> : <EmptyRows />}<Pagination nextCursor={page.data?.nextCursor} setCursor={setCursor} cursor={cursor} /></section>}
+     {!page.isLoading && !page.isError && <section className="panel">
+       <PanelTitle title="Posições" aside={<span className="eyebrow">{page.data?.items.length ?? 0} REGISTOS</span>} />
+       {page.data?.items.length ? <div className="table-wrap"><table>
+         <thead><tr><th>Token / Mint</th><th>Capital investido</th><th>Taxas pagas</th><th>Valor estimado</th><th>P&L aberto estimado</th><th>P&L realizado líquido</th><th>Última marca</th><th>Aberta</th><th>Retenção</th><th>Estado / venda</th><th>Ação</th></tr></thead>
+         <tbody>{page.data.items.map(p => {
+           const markAge = p.markAgeSeconds;
+           const markIsStale = markAge != null && markAge > 30;
+           return <tr key={p.id}>
+             <td><div className="text-xs font-medium">{p.symbol || p.tokenName || 'Token sem nome'}</div><div className="mono mt-1 text-[10px] muted">{shortKey(p.mint)}</div></td>
+             <td className="mono text-xs">{fmtSol(p.buyValueSol)} SOL</td>
+             <td className="mono text-xs warning">{fmtSol(p.costsSol)} SOL</td>
+             <td className="mono text-xs">{fmtSol(p.estimatedValueSol)} SOL</td>
+             <td className={`mono text-xs ${p.estimatedPnlSol == null ? 'muted' : p.estimatedPnlSol >= 0 ? 'positive' : 'negative'}`} title="Estimativa bruta pela variação do market cap; não inclui uma venda futura.">{fmtSol(p.estimatedPnlSol)} SOL</td>
+             <td className={`mono text-xs ${p.realizedPnlSol == null ? 'muted' : p.realizedPnlSol >= 0 ? 'positive' : 'negative'}`}>{fmtSol(p.realizedPnlSol)} SOL</td>
+             <td className="whitespace-nowrap text-xs">
+               {p.markAvailable ? <><div className="mono">MC {fmtSol(p.currentMarketCapSol)}</div><div className={`mt-1 ${markIsStale ? 'warning' : 'muted'}`}>{markAge == null ? 'Idade indisponível' : `${markIsStale ? 'Marca antiga' : 'Atualizada'} · ${fmt(markAge, 0)} s`}</div></> : <span className="muted">Cotação indisponível</span>}
+             </td>
+             <td className="whitespace-nowrap text-xs muted">{fmtDate(p.openedAt)}</td>
+             <td className="whitespace-nowrap text-xs muted">{elapsedSince(p.openedAt)}</td>
+             <td><StatusTag value={p.status} positive={['open', 'closed']} warning={['closing']} negative={['failed']} /><div className="mt-1"><StatusTag value={p.sellStatus} positive={['confirmed']} warning={['submitted']} negative={['failed']} /></div></td>
+             <td><button className="button button-small button-danger" disabled={p.status !== 'open' || sell.isPending} onClick={() => setSellId(p.id)}>Solicitar venda</button></td>
+           </tr>;
+         })}</tbody>
+       </table></div> : <EmptyRows />}<Pagination nextCursor={page.data?.nextCursor} setCursor={setCursor} cursor={cursor} />
+     </section>}
     {sellId && <div className="modal-backdrop" role="presentation"><form className="modal" onSubmit={confirmSell} aria-labelledby="sell-title"><div className="flex items-start justify-between"><div><div className="eyebrow">PEDIDO AO BACK-END</div><h2 id="sell-title" className="display mt-2 text-xl">Solicitar venda manual</h2></div><button className="button button-small" type="button" aria-label="Fechar" onClick={() => setSellId(null)}><X size={15} /></button></div><p className="text-sm muted">A venda só será confirmada quando a API aceitar. Esta ação não assina transações no browser.</p><label className="mb-1 block text-xs muted" htmlFor="sell-reason">Motivo (opcional)</label><input id="sell-reason" className="input" value={reason} onChange={e => setReason(e.target.value)} maxLength={240} /><div className="mt-5 flex justify-end gap-2"><button type="button" className="button" onClick={() => setSellId(null)}>Cancelar</button><button type="submit" className="button button-danger" disabled={sell.isPending}>{sell.isPending ? 'A enviar…' : 'Enviar pedido'}</button></div>{sell.isError && <p className="negative text-xs">Falha no pedido. Aguardando conexão com o back-end</p>}</form></div>}
   </DataPageFrame>;
 }
@@ -316,12 +390,12 @@ function TradesPage() {
   const [mint, setMint] = useState(''), [result, setResult] = useState(''), [from, setFrom] = useState(''), [to, setTo] = useState('');
   const [cursor, setCursor] = useState<string | undefined>();
   const params = useMemo<GetTradesParams>(() => ({ limit: 30, ...(mint ? { mint } : {}), ...(result ? { result: result as GetTradesParams['result'] } : {}), ...(from ? { from: new Date(from).toISOString() } : {}), ...(to ? { to: new Date(to).toISOString() } : {}), ...(cursor ? { cursor } : {}) }), [mint, result, from, to, cursor]);
-  const page = useGetTrades(params);
+  const page = useGetTrades(params, { query: { refetchInterval: LIVE_DATA_REFRESH_MS } });
   return <DataPageFrame description="Resultados reportados, com P&L realizado separado das estimativas de posições."><section className="panel mb-4 p-4"><div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4"><label className="text-xs muted">Mint<input className="input mt-1 mono" placeholder="Filtrar pelo mint" value={mint} onChange={e => { setMint(e.target.value); setCursor(undefined); }} /></label><label className="text-xs muted">Resultado<select className="select mt-1" value={result} onChange={e => { setResult(e.target.value); setCursor(undefined); }}><option value="">Todos</option><option value="positive">Positivo</option><option value="negative">Negativo</option><option value="break_even">Sem variação</option><option value="unknown">Desconhecido</option></select></label><label className="text-xs muted">De<input type="date" className="input mt-1" value={from} onChange={e => { setFrom(e.target.value); setCursor(undefined); }} /></label><label className="text-xs muted">Até<input type="date" className="input mt-1" value={to} onChange={e => { setTo(e.target.value); setCursor(undefined); }} /></label></div></section><QueryState loading={page.isLoading} error={page.isError} onRetry={() => void page.refetch()} />{!page.isLoading && !page.isError && <section className="panel"><PanelTitle title="Histórico de operações" /><>{page.data?.items.length ? <TradesTable items={page.data.items} /> : <EmptyRows>Não existem operações para os filtros selecionados.</EmptyRows>}</><Pagination nextCursor={page.data?.nextCursor} setCursor={setCursor} cursor={cursor} /></section>}</DataPageFrame>;
 }
 
 function RpcsPage() {
-  const q = useGetRpcs();
+  const q = useGetRpcs({ query: { refetchInterval: 15000 } });
   const test = useTestRpc(), select = useSelectRpc();
   const qc = useQueryClient();
   const [confirm, setConfirm] = useState<{ id: string; role: 'primary' | 'backup' | 'disabled' } | null>(null);
@@ -338,74 +412,44 @@ function RpcsPage() {
 }
 function redactUrl(value: string) { try { const url = new URL(value); return `${url.protocol}//${url.host}${url.pathname}${url.search ? '?…' : ''}`; } catch { return 'Indisponível'; } }
 
-const strategyFields: { key: keyof StrategyConfigInput; label: string; unit: string; min: number; step: string }[] = [
-  { key: 'maxCapitalPerTradeSol', label: 'Capital máximo por operação', unit: 'SOL', min: 0, step: 'any' },
-  { key: 'profitTargetPercent', label: 'Alvo de lucro', unit: '%', min: 0, step: 'any' },
-  { key: 'maxLossPercent', label: 'Perda máxima', unit: '%', min: 0, step: 'any' },
-  { key: 'maxSlippagePercent', label: 'Slippage máximo', unit: '%', min: 0, step: 'any' },
-  { key: 'priorityFeeSol', label: 'Taxa prioritária', unit: 'SOL', min: 0, step: 'any' },
-  { key: 'maxConcurrentPositions', label: 'Posições simultâneas', unit: 'posições', min: 1, step: '1' },
-  { key: 'maxHoldMinutes', label: 'Tempo máximo de retenção', unit: 'min', min: 1, step: '1' },
-  { key: 'dailyLossLimitSol', label: 'Limite de perda diária', unit: 'SOL', min: 0, step: 'any' },
-  { key: 'minFeeReserveSol', label: 'Reserva mínima para taxas', unit: 'SOL', min: 0, step: 'any' },
-];
+type RuntimeConfigView = {
+  simulation: boolean;
+  liveTradingEnabled: boolean;
+  maxHoldSeconds: number;
+  effectiveMaxHoldSeconds: number;
+};
+
 function StrategyPage() {
-  const q = useGetConfig();
-  const save = useSaveConfig();
-  const qc = useQueryClient();
-  const [values, setValues] = useState<Record<string, string>>({});
-  const [mode, setMode] = useState<StrategyConfigInput['mode']>('unknown');
-  const [entry, setEntry] = useState('{}'), [exit, setExit] = useState('{}');
-  const initialized = useRef(false);
-  useEffect(() => {
-    if (q.data && !initialized.current) {
-      initialized.current = true;
-      const next: Record<string, string> = {};
-      strategyFields.forEach(f => { const value = q.data?.[f.key]; next[f.key] = value == null ? '' : String(value); });
-      setValues(next); setEntry(JSON.stringify(q.data.entryCriteria, null, 2)); setExit(JSON.stringify(q.data.exitCriteria, null, 2)); setMode(q.data.mode);
-    }
-  }, [q.data]);
-  const submit = (e: FormEvent) => {
-    e.preventDefault();
-    if (save.isPending) return;
-    try {
-      const parsed: Record<string, number> = {};
-      for (const f of strategyFields) {
-        const raw = values[f.key];
-        if (raw === '' || !Number.isFinite(Number(raw)) || Number(raw) < f.min) throw new Error(`Verifique: ${f.label}.`);
-        parsed[f.key] = Number(raw);
-      }
-      if (parsed.maxSlippagePercent > 100) throw new Error('Slippage máximo não pode exceder 100%.');
-      const entryCriteria = JSON.parse(entry), exitCriteria = JSON.parse(exit);
-      if (!entryCriteria || typeof entryCriteria !== 'object' || Array.isArray(entryCriteria) || !exitCriteria || typeof exitCriteria !== 'object' || Array.isArray(exitCriteria)) throw new Error('Critérios devem ser objetos JSON.');
-      if (mode === 'unknown') throw new Error('Selecione um modo de operação antes de guardar.');
-      const confirmation = mode === 'real' && q.data?.mode !== 'real' ? 'Confirma a alteração para modo real e o envio da configuração ao back-end?' : 'Confirma o envio da configuração para validação pelo back-end?';
-      if (!window.confirm(confirmation)) return;
-      const payload = { ...parsed, entryCriteria, exitCriteria, mode } as StrategyConfigInput;
-      save.mutate({ data: payload }, { onSuccess: response => { notify({ text: 'Configuração validada e guardada pelo back-end.', kind: 'success' }); void qc.invalidateQueries({ queryKey: getGetConfigQueryKey() }); setValues(Object.fromEntries(strategyFields.map(f => [f.key, response[f.key] == null ? '' : String(response[f.key])]))); setMode(response.mode); }, onError: () => notify({ text: 'Aguardando conexão com o back-end', kind: 'error' }) });
-    } catch (error) { notify({ text: error instanceof Error ? error.message : 'Configuração inválida.', kind: 'error' }); }
-  };
-  return <DataPageFrame description="Os parâmetros são validados e aplicados exclusivamente pelo serviço.">
+  const q = useGetConfig({ query: { refetchInterval: 30000 } });
+  const config = q.data as unknown as RuntimeConfigView | undefined;
+  return <DataPageFrame description="Parâmetros efetivos reportados pelo serviço. Esta tela é somente leitura.">
     <QueryState loading={q.isLoading} error={q.isError} onRetry={() => void q.refetch()} />
-    {!q.isLoading && !q.isError && q.data && <form className="space-y-4" onSubmit={submit}>
-      <section className="panel"><PanelTitle title="Limites operacionais" aside={<span className="text-xs muted">Modo atual: {mode}</span>} /><div className="grid gap-4 p-4 sm:grid-cols-2 lg:grid-cols-3">{strategyFields.map(f => <label className="text-xs muted" key={f.key}>{f.label}<div className="relative mt-1"><input type="number" min={f.min} max={f.key === 'maxSlippagePercent' ? 100 : undefined} step={f.step} required className="input pr-16 mono" value={values[f.key] ?? ''} onChange={e => setValues(s => ({ ...s, [f.key]: e.target.value }))} data-testid={`input-strategy-${f.key}`} /><span className="absolute right-3 top-2.5 text-[10px] muted">{f.unit}</span></div></label>)}</div></section>
-      <section className="panel p-4"><label className="block max-w-sm text-xs muted">Modo de operação<select className="select mt-2" value={mode} onChange={e => setMode(e.target.value as StrategyConfigInput['mode'])} data-testid="select-strategy-mode"><option value="unknown" disabled>Indisponível</option><option value="simulation">Simulação</option><option value="real">Real — confirmação necessária</option></select></label><p className="mb-0 mt-2 text-xs muted">A configuração não garante lucro; o back-end valida todos os valores antes de aceitar.</p></section>
-      <div className="grid gap-4 lg:grid-cols-2"><section className="panel"><PanelTitle title="Critérios de entrada" /><div className="p-4"><textarea className="input mono min-h-40 resize-y text-xs" value={entry} onChange={e => setEntry(e.target.value)} aria-label="Critérios de entrada em JSON" /></div></section><section className="panel"><PanelTitle title="Critérios de saída" /><div className="p-4"><textarea className="input mono min-h-40 resize-y text-xs" value={exit} onChange={e => setExit(e.target.value)} aria-label="Critérios de saída em JSON" /></div></section></div>
-      <div className="flex flex-wrap items-center justify-between gap-3"><span className="text-xs muted">Atualização aceite: {fmtDate(q.data.updatedAt)}</span><button className="button button-primary" type="submit" disabled={save.isPending}>{save.isPending ? 'A validar…' : 'Guardar configuração'} <Check size={15} /></button></div>
-      {save.isError && <p className="negative text-sm">Configuração não confirmada. Aguardando conexão com o back-end</p>}
-    </form>}
+    {!q.isLoading && !q.isError && config && <section className="panel">
+      <PanelTitle title="Tempo máximo de retenção" aside={<StatusTag value={config.simulation ? 'simulation' : config.liveTradingEnabled ? 'live' : 'live disabled'} positive={['simulation', 'live']} warning={['live disabled']} />} />
+      <div className="grid gap-4 p-4 sm:grid-cols-2">
+        <div className="rounded-lg border border-border/70 p-4">
+          <div className="eyebrow">MAX_HOLD_SECONDS · CONFIGURADO</div>
+          <div className="display mt-2 text-2xl">{config.maxHoldSeconds == null ? 'Indisponível' : `${fmt(config.maxHoldSeconds, 0)} s`}</div>
+        </div>
+        <div className="rounded-lg border border-border/70 p-4">
+          <div className="eyebrow">LIMITE EFETIVO NO MONITOR</div>
+          <div className="display mt-2 text-2xl">{config.effectiveMaxHoldSeconds == null ? 'Indisponível' : `${fmt(config.effectiveMaxHoldSeconds, 0)} s`}</div>
+        </div>
+      </div>
+      <p className="mb-0 px-4 pb-4 text-xs muted">Somente leitura. Para alterar, ajuste MAX_HOLD_SECONDS no ambiente do serviço e reinicie o backend.</p>
+    </section>}
   </DataPageFrame>;
 }
 
 function WalletPage() {
-  const q = useGetWallet();
+  const q = useGetWallet({ query: { refetchInterval: LIVE_DATA_REFRESH_MS } });
   const tokenHoldings = q.data?.tokenHoldings ?? [];
   const [copied, setCopied] = useState(false);
   const copy = async () => { if (!q.data?.publicAddress) return; try { await navigator.clipboard.writeText(q.data.publicAddress); setCopied(true); setTimeout(() => setCopied(false), 1600); } catch { notify({ text: 'Não foi possível copiar o endereço.', kind: 'error' }); } };
   return <DataPageFrame description="Visualização pública e sincronização reportada. Nenhuma chave privada é apresentada.">
     <QueryState loading={q.isLoading} error={q.isError} onRetry={() => void q.refetch()} />
     {!q.isLoading && !q.isError && q.data && <>
-      <div className="mb-4 grid gap-3 sm:grid-cols-3"><Metric label="Saldo" value={fmt(q.data.balanceSol)} suffix="SOL" /><Metric label="Reserva de taxas" value={fmt(q.data.feesReserveSol)} suffix="SOL" tone="warning" /><section className="panel metric p-4"><div className="eyebrow">SINCRONIZAÇÃO</div><div className="mt-3"><StatusTag value={q.data.syncStatus} positive={['synced']} warning={['syncing', 'stale']} negative={['unavailable']} /></div><div className="mt-2 text-xs muted">{fmtDate(q.data.updatedAt)}</div></section></div>
+      <div className="mb-4 grid gap-3 sm:grid-cols-3"><Metric label="Saldo" value={fmtSol(q.data.balanceSol)} suffix="SOL" /><Metric label="Reserva de taxas" value={fmtSol(q.data.feesReserveSol)} suffix="SOL" tone="warning" /><section className="panel metric p-4"><div className="eyebrow">SINCRONIZAÇÃO</div><div className="mt-3"><StatusTag value={q.data.syncStatus} positive={['synced']} warning={['syncing', 'stale']} negative={['unavailable']} /></div><div className="mt-2 text-xs muted">{fmtDate(q.data.updatedAt)}</div></section></div>
       <section className="panel mb-4"><PanelTitle title="Endereço público" aside={<StatusTag value={q.data.syncStatus} positive={['synced']} warning={['syncing', 'stale']} negative={['unavailable']} />} /><div className="flex flex-wrap items-center justify-between gap-3 p-4"><code className="mono break-all text-xs">{q.data.publicAddress || 'Indisponível'}</code><button className="button button-small" disabled={!q.data.publicAddress} onClick={() => void copy()}>{copied ? <Check size={14} /> : <Copy size={14} />}{copied ? 'Copiado' : 'Copiar endereço'}</button></div></section>
       <section className="panel"><PanelTitle title="Ativos monitorizados" aside={<span className="eyebrow">{tokenHoldings.length} ATIVOS</span>} />{tokenHoldings.length ? <div className="table-wrap"><table><thead><tr><th>Ativo</th><th>Mint</th><th>Quantidade</th><th>Explorer</th></tr></thead><tbody>{tokenHoldings.map(t => <tr key={t.mint}><td className="text-xs font-medium">{t.symbol || 'Símbolo indisponível'}</td><td className="mono text-xs">{shortKey(t.mint)}</td><td className="mono text-xs">{fmt(t.quantity)}</td><td><a className="technical text-xs" href={`https://solscan.io/account/${encodeURIComponent(t.mint)}`} target="_blank" rel="noreferrer">Solscan <ExternalLink className="inline" size={12} /></a></td></tr>)}</tbody></table></div> : <EmptyRows>Não existem ativos reportados.</EmptyRows>}</section>
     </>}
@@ -416,7 +460,7 @@ function LogsPage() {
   const [category, setCategory] = useState(''), [severity, setSeverity] = useState(''), [from, setFrom] = useState(''), [to, setTo] = useState('');
   const [cursor, setCursor] = useState<string | undefined>();
   const params = useMemo<GetLogsParams>(() => ({ limit: 40, ...(category ? { category } : {}), ...(severity ? { severity: severity as GetLogsParams['severity'] } : {}), ...(from ? { from: new Date(from).toISOString() } : {}), ...(to ? { to: new Date(to).toISOString() } : {}), ...(cursor ? { cursor } : {}) }), [category, severity, from, to, cursor]);
-  const page = useGetLogs(params);
+  const page = useGetLogs(params, { query: { refetchInterval: LIVE_DATA_REFRESH_MS } });
   return <DataPageFrame description="Eventos operacionais filtrados. Conteúdo sensível não deve ser devolvido pela API.">
     <section className="panel mb-4 p-4"><div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4"><label className="text-xs muted">Categoria<input className="input mt-1" placeholder="Todas as categorias" value={category} onChange={e => { setCategory(e.target.value); setCursor(undefined); }} /></label><label className="text-xs muted">Severidade<select className="select mt-1" value={severity} onChange={e => { setSeverity(e.target.value); setCursor(undefined); }}><option value="">Todas</option>{['debug','info','warning','error','critical'].map(x => <option key={x} value={x}>{x}</option>)}</select></label><label className="text-xs muted">De<input type="datetime-local" className="input mt-1" value={from} onChange={e => { setFrom(e.target.value); setCursor(undefined); }} /></label><label className="text-xs muted">Até<input type="datetime-local" className="input mt-1" value={to} onChange={e => { setTo(e.target.value); setCursor(undefined); }} /></label></div></section>
     <QueryState loading={page.isLoading} error={page.isError} onRetry={() => void page.refetch()} />
@@ -488,6 +532,7 @@ function ClerkRoutes() {
         <Route path="/sign-in/*?" component={SignInPage} />
         <Route path="/sign-up/*?" component={SignUpPage} />
         <Route path="/user-portal"><PortalRoute><AppShell><DashboardPage /></AppShell></PortalRoute></Route>
+        <Route path="/user-portal/reports"><PortalRoute><AppShell><PerformanceReportPage /></AppShell></PortalRoute></Route>
         <Route path="/user-portal/tokens"><PortalRoute><AppShell><TokensPage /></AppShell></PortalRoute></Route>
         <Route path="/user-portal/positions"><PortalRoute><AppShell><PositionsPage /></AppShell></PortalRoute></Route>
         <Route path="/user-portal/trades"><PortalRoute><AppShell><TradesPage /></AppShell></PortalRoute></Route>
@@ -532,7 +577,27 @@ function MasterRoutes() {
   const signOut = () => { localStorage.removeItem(authStorageKey); setToken(null); window.location.assign(`${basePath || ''}/sign-in`); };
   useEffect(() => { setAuthTokenGetter(token ? () => token : null); return () => setAuthTokenGetter(null); }, [token]);
   const auth = useMemo(() => ({ token, signOut }), [token]);
-  return <AuthContext.Provider value={auth}><MasterSignInContext.Provider value={signIn}><QueryClientProvider client={queryClient}><Switch><Route path="/" component={() => token ? <Redirect to="/user-portal" /> : <Redirect to="/sign-in" />} /><Route path="/sign-in" component={MasterLogin} /><Route path="/user-portal"><MasterPortalRoute><AppShell><DashboardPage /></AppShell></MasterPortalRoute></Route><Route path="/user-portal/tokens"><MasterPortalRoute><AppShell><TokensPage /></AppShell></MasterPortalRoute></Route><Route path="/user-portal/positions"><MasterPortalRoute><AppShell><PositionsPage /></AppShell></MasterPortalRoute></Route><Route path="/user-portal/trades"><MasterPortalRoute><AppShell><TradesPage /></AppShell></MasterPortalRoute></Route><Route path="/user-portal/rpcs"><MasterPortalRoute><AppShell><RpcsPage /></AppShell></MasterPortalRoute></Route><Route path="/user-portal/strategy"><MasterPortalRoute><AppShell><StrategyPage /></AppShell></MasterPortalRoute></Route><Route path="/user-portal/wallet"><MasterPortalRoute><AppShell><WalletPage /></AppShell></MasterPortalRoute></Route><Route path="/user-portal/logs"><MasterPortalRoute><AppShell><LogsPage /></AppShell></MasterPortalRoute></Route><Route component={NotFound} /></Switch><ToastHost /></QueryClientProvider></MasterSignInContext.Provider></AuthContext.Provider>;
+  return <AuthContext.Provider value={auth}>
+    <MasterSignInContext.Provider value={signIn}>
+      <QueryClientProvider client={queryClient}>
+        <Switch>
+          <Route path="/" component={() => token ? <Redirect to="/user-portal" /> : <Redirect to="/sign-in" />} />
+          <Route path="/sign-in" component={MasterLogin} />
+          <Route path="/user-portal"><MasterPortalRoute><AppShell><DashboardPage /></AppShell></MasterPortalRoute></Route>
+          <Route path="/user-portal/reports"><MasterPortalRoute><AppShell><PerformanceReportPage /></AppShell></MasterPortalRoute></Route>
+          <Route path="/user-portal/tokens"><MasterPortalRoute><AppShell><TokensPage /></AppShell></MasterPortalRoute></Route>
+          <Route path="/user-portal/positions"><MasterPortalRoute><AppShell><PositionsPage /></AppShell></MasterPortalRoute></Route>
+          <Route path="/user-portal/trades"><MasterPortalRoute><AppShell><TradesPage /></AppShell></MasterPortalRoute></Route>
+          <Route path="/user-portal/rpcs"><MasterPortalRoute><AppShell><RpcsPage /></AppShell></MasterPortalRoute></Route>
+          <Route path="/user-portal/strategy"><MasterPortalRoute><AppShell><StrategyPage /></AppShell></MasterPortalRoute></Route>
+          <Route path="/user-portal/wallet"><MasterPortalRoute><AppShell><WalletPage /></AppShell></MasterPortalRoute></Route>
+          <Route path="/user-portal/logs"><MasterPortalRoute><AppShell><LogsPage /></AppShell></MasterPortalRoute></Route>
+          <Route component={NotFound} />
+        </Switch>
+        <ToastHost />
+      </QueryClientProvider>
+    </MasterSignInContext.Provider>
+  </AuthContext.Provider>;
 }
 function App() { return <WouterRouter base={basePath}><MasterRoutes /></WouterRouter>; }
 
