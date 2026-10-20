@@ -1,0 +1,17 @@
+backend/
+front/
+node_modules/
+.git/
+dist/
+build/
+*.log
+.env.local
+.vscode/
+.idea/
+*.db
+*.sqlite
+*.sqlite3
+data/
+attached_assets/
+.agents/
+.replit

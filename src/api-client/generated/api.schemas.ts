@@ -157,7 +157,9 @@ export interface Dashboard {
   /** @nullable */
   tradesCount: number | null;
   transactionsCount?: number | null;
-  closedTrades?: number | null;
+  closedTrades: number;
+  sellAttempts: number;
+  failedSellAttempts: number;
   /** @nullable */
   openPositions: number | null;
   /** @nullable */
@@ -172,6 +174,7 @@ export interface Dashboard {
   feesPaidSol?: number | null;
   virtualEquitySol?: number | null;
   simulationBalanceSol?: number | null;
+  simulationResetBalanceSol?: number | null;
   staleMarks?: {
     total: number;
     flat: number;
